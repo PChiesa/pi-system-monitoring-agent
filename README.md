@@ -27,7 +27,7 @@ PI Web API (WebSocket channel)
 ## Prerequisites
 
 - [Bun](https://bun.sh/) (v1.0+)
-- Access to an OSIsoft PI Web API server
+- Access to an OSIsoft PI Web API server **or** the included PI API simulator for local development
 - An Anthropic API key (for the Claude Agent SDK)
 
 ## Setup
@@ -84,6 +84,57 @@ Once running, the agent will:
 4. Trigger Claude-powered analysis on threshold breaches
 5. Run periodic health-check analyses on a configurable interval
 
+## PI Web API Simulator
+
+A local simulator is included for development and testing without a real PI Web API server. It generates realistic BOP sensor data using an Ornstein-Uhlenbeck process (mean-reverting random walk) for continuous tags and provides the same REST and WebSocket interfaces the agent expects.
+
+### Running the simulator
+
+```bash
+bun run simulator
+```
+
+Then connect the agent in a separate terminal:
+
+```bash
+PI_SERVER=localhost:8443 PI_DATA_ARCHIVE=SIMULATOR PI_USERNAME=sim PI_PASSWORD=sim bun run dev
+```
+
+### CLI options
+
+| Option | Description |
+|---|---|
+| `--port=PORT` | Server port (default: 8443, env: `SIM_PORT`) |
+| `--scenario=NAME` | Start with a specific scenario (switches to manual mode) |
+| `--auto` | Auto mode: randomly trigger fault scenarios (default) |
+| `--interval=SEC` | Auto mode interval in seconds (default: 600, env: `SIM_AUTO_INTERVAL_MS`) |
+| `-h, --help` | Show help |
+
+### Fault scenarios
+
+The simulator ships with five built-in scenarios that progressively push sensor values through warning and critical thresholds:
+
+| Scenario | Duration | Description |
+|---|---|---|
+| `normal` | indefinite | Steady-state operation — all parameters at nominal with standard noise |
+| `accumulator-decay` | 8 min | Gradual accumulator pressure loss simulating a hydraulic leak |
+| `kick-detection` | 5 min | Well kick event — pit gain, flow increase, casing pressure rise |
+| `ram-slowdown` | 10 min | Increasing BOP close times simulating seal wear or N2 depletion |
+| `pod-failure` | 6 min | Blue control pod battery drain and failure |
+
+In **auto mode** (the default), the simulator randomly activates fault scenarios on a configurable interval. In **manual mode** (`--scenario=NAME`), a single scenario runs immediately.
+
+### Admin API
+
+While the simulator is running, use the admin endpoints to inspect and control it:
+
+```bash
+curl -k https://localhost:8443/admin/status                                      # Server status
+curl -k https://localhost:8443/admin/scenarios                                   # List available scenarios
+curl -k -X POST https://localhost:8443/admin/scenario -d '{"name":"kick-detection"}'  # Activate a scenario
+curl -k -X POST https://localhost:8443/admin/scenario/stop                       # Stop active scenario
+```
+
 ## Monitored Tags
 
 25 PI tags across 6 BOP subsystems:
@@ -110,6 +161,23 @@ src/
   alert-manager.ts      # AlertManager — stores alerts/recommendations, console logging
   pi-channel-client.ts  # PIChannelClient — WebSocket client with auto-reconnect
   pi-rest-client.ts     # PIRestClient — REST client for PI Web API
+
+simulator/
+  index.ts              # Entry point — CLI argument parsing, server startup
+  server.ts             # SimulatorServer — HTTPS server, admin endpoints, 1 Hz tick loop
+  tag-registry.ts       # Tag metadata registry (WebId generation, path lookup)
+  data-generator.ts     # Ornstein-Uhlenbeck data generator with scenario modifiers
+  scenario-engine.ts    # Scenario lifecycle management (auto/manual modes)
+  rest-handler.ts       # PI Web API REST endpoint handlers (points, streams, recorded)
+  ws-handler.ts         # WebSocket channel handler (streamsets/channel, 1 Hz push)
+  tls.ts                # Self-signed TLS certificate generation
+  pi-time.ts            # PI time syntax parser (*-1h, *-30m, ISO 8601)
+  scenarios/
+    normal.ts           # Steady-state operation (no modifiers)
+    accumulator-decay.ts # Hydraulic leak — accumulator pressure decay
+    kick-detection.ts   # Well kick — pit gain, flow increase, casing pressure rise
+    ram-slowdown.ts     # Increasing BOP close times — seal wear / N2 depletion
+    pod-failure.ts      # Blue pod battery drain and failure
 
 tests/
   shared-mocks.ts       # Shared mock factories (Bun #12823 workaround)
