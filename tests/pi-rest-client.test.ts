@@ -1,9 +1,8 @@
-import { jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest, mock, spyOn } from 'bun:test';
 
 const mockGet = jest.fn<(...args: any[]) => any>();
 
-jest.unstable_mockModule('axios', () => ({
-  __esModule: true,
+mock.module('axios', () => ({
   default: {
     create: jest.fn(() => ({ get: mockGet })),
   },
@@ -97,7 +96,7 @@ describe('PIRestClient', () => {
     });
 
     it('skips tags that fail to resolve', async () => {
-      jest.spyOn(console, 'warn').mockImplementation((() => {}) as any);
+      spyOn(console, 'warn').mockImplementation((() => {}) as any);
 
       mockGet
         .mockResolvedValueOnce({ data: { WebId: 'W1' } })

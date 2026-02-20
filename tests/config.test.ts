@@ -1,8 +1,8 @@
-import { jest } from '@jest/globals';
+import { describe, it, expect, afterEach } from 'bun:test';
 
 // Config values are evaluated at import time so we test them by importing
 // with controlled env vars. Since ESM caches modules, we use
-// jest.unstable_mockModule + dynamic import patterns.
+// mock.module + dynamic import patterns.
 
 describe('config', () => {
   const originalEnv = { ...process.env };

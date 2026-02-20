@@ -1,13 +1,7 @@
-import { jest } from '@jest/globals';
+import { describe, it, expect, mock } from 'bun:test';
+import { configMock } from './shared-mocks';
 
-jest.unstable_mockModule('../src/config', () => ({
-  BOP_CONFIG: {
-    ratedWorkingPressure: 15000,
-    masp: 12500,
-    analysisIntervalMs: 300000,
-    agentModel: 'sonnet',
-  },
-}));
+mock.module('../src/config', () => configMock());
 
 const { BOP_SYSTEM_PROMPT } = await import('../src/bop-system-prompt');
 

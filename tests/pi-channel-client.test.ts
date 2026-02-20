@@ -1,20 +1,19 @@
-import { jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest, mock, spyOn } from 'bun:test';
 import { EventEmitter } from 'events';
 
 const MockWebSocketConstructor = jest.fn();
 
-jest.unstable_mockModule('ws', () => ({
-  __esModule: true,
+mock.module('ws', () => ({
   default: MockWebSocketConstructor,
 }));
 
 // Dynamic import after mock setup
 const { PIChannelClient } = await import('../src/pi-channel-client');
 
-function createMockWs(): EventEmitter & { close: jest.Mock; pong: jest.Mock } {
+function createMockWs(): EventEmitter & { close: ReturnType<typeof jest.fn>; pong: ReturnType<typeof jest.fn> } {
   const emitter = new EventEmitter() as EventEmitter & {
-    close: jest.Mock;
-    pong: jest.Mock;
+    close: ReturnType<typeof jest.fn>;
+    pong: ReturnType<typeof jest.fn>;
   };
   emitter.close = jest.fn();
   emitter.pong = jest.fn();
@@ -36,8 +35,8 @@ describe('PIChannelClient', () => {
 
   beforeEach(() => {
     jest.useFakeTimers();
-    jest.spyOn(console, 'log').mockImplementation((() => {}) as any);
-    jest.spyOn(console, 'error').mockImplementation((() => {}) as any);
+    spyOn(console, 'log').mockImplementation((() => {}) as any);
+    spyOn(console, 'error').mockImplementation((() => {}) as any);
 
     mockWs = createMockWs();
     MockWebSocketConstructor.mockImplementation(() => mockWs);
@@ -189,7 +188,7 @@ describe('PIChannelClient', () => {
       const client = new PIChannelClient(defaultConfig);
       client.connect();
 
-      jest.spyOn(Math, 'random').mockReturnValue(0);
+      spyOn(Math, 'random').mockReturnValue(0);
 
       mockWs.emit('close');
 
@@ -215,7 +214,7 @@ describe('PIChannelClient', () => {
       const maxHandler = jest.fn();
       client.on('maxReconnectReached', maxHandler);
 
-      jest.spyOn(Math, 'random').mockReturnValue(0);
+      spyOn(Math, 'random').mockReturnValue(0);
 
       client.connect();
 
