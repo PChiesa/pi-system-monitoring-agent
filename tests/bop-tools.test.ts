@@ -1,8 +1,9 @@
-import { jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest, mock, spyOn } from 'bun:test';
+import { sdkMock } from './shared-mocks';
 
 const mockToolHandlers = new Map<string, Function>();
 
-jest.unstable_mockModule('@anthropic-ai/claude-agent-sdk', () => ({
+mock.module('@anthropic-ai/claude-agent-sdk', () => sdkMock({
   tool: (name: string, _desc: string, _schema: any, handler: Function) => {
     mockToolHandlers.set(name, handler);
     return { name, handler };
@@ -16,8 +17,7 @@ jest.unstable_mockModule('@anthropic-ai/claude-agent-sdk', () => ({
 
 const mockAxiosGet = jest.fn<(...args: any[]) => any>();
 
-jest.unstable_mockModule('axios', () => ({
-  __esModule: true,
+mock.module('axios', () => ({
   default: {
     create: jest.fn(() => ({ get: mockAxiosGet })),
   },
@@ -35,7 +35,7 @@ describe('createBOPToolsServer', () => {
 
   beforeEach(() => {
     mockToolHandlers.clear();
-    jest.spyOn(console, 'log').mockImplementation((() => {}) as any);
+    spyOn(console, 'log').mockImplementation((() => {}) as any);
 
     sensorState = new SensorStateManager(10);
     sensorState.registerTag('BOP.ACC.PRESS.SYS', 'w1', 'PSI');

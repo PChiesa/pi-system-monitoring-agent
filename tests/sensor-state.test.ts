@@ -1,4 +1,4 @@
-import { jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest } from 'bun:test';
 import { SensorStateManager, ThresholdBreach } from '../src/sensor-state';
 import { ThresholdRule } from '../src/config';
 

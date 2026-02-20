@@ -1,20 +1,14 @@
-import { jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest, mock, spyOn } from 'bun:test';
+import { configMock, sdkMock } from './shared-mocks';
 
 let lastQueryArgs: any = null;
 let mockMessages: any[] = [];
 
-jest.unstable_mockModule('../src/config', () => ({
-  BOP_CONFIG: {
-    ratedWorkingPressure: 15000,
-    masp: 12500,
-    analysisIntervalMs: 300000,
-    agentModel: 'sonnet',
-  },
-}));
+mock.module('../src/config', () => configMock());
 
-jest.unstable_mockModule('../src/bop-system-prompt', () => ({
-  BOP_SYSTEM_PROMPT: 'Test system prompt',
-}));
+// Don't mock bop-system-prompt — let it use the real template with mocked config.
+// Mocking it here would leak 'Test system prompt' into bop-system-prompt.test.ts
+// because Bun's mock.module is global (oven-sh/bun#12823).
 
 const mockQuery = jest.fn((args: any) => {
   lastQueryArgs = args;
@@ -27,11 +21,10 @@ const mockQuery = jest.fn((args: any) => {
   };
 });
 
-jest.unstable_mockModule('@anthropic-ai/claude-agent-sdk', () => ({
-  query: mockQuery,
-}));
+mock.module('@anthropic-ai/claude-agent-sdk', () => sdkMock({ query: mockQuery }));
 
 const { BOPAgent } = await import('../src/bop-agent');
+const { BOP_SYSTEM_PROMPT } = await import('../src/bop-system-prompt');
 
 describe('BOPAgent', () => {
   const mockMcpServer = {
@@ -46,7 +39,7 @@ describe('BOPAgent', () => {
     lastQueryArgs = null;
     mockMessages = [];
     jest.clearAllMocks();
-    jest.spyOn(console, 'log').mockImplementation((() => {}) as any);
+    spyOn(console, 'log').mockImplementation((() => {}) as any);
     agent = new BOPAgent(mockMcpServer);
   });
 
@@ -70,7 +63,7 @@ describe('BOPAgent', () => {
         expect.objectContaining({
           prompt: 'Test context',
           options: expect.objectContaining({
-            systemPrompt: 'Test system prompt',
+            systemPrompt: BOP_SYSTEM_PROMPT,
             model: 'sonnet',
             permissionMode: 'bypassPermissions',
             maxTurns: 25,

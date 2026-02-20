@@ -1,4 +1,4 @@
-import { jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest, spyOn } from 'bun:test';
 import { AlertManager, Alert, Recommendation } from '../src/alert-manager';
 
 describe('AlertManager', () => {
@@ -6,7 +6,7 @@ describe('AlertManager', () => {
 
   beforeEach(() => {
     alertManager = new AlertManager();
-    jest.spyOn(console, 'log').mockImplementation((() => {}) as any);
+    spyOn(console, 'log').mockImplementation((() => {}) as any);
   });
 
   afterEach(() => {

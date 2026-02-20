@@ -8,15 +8,15 @@ The agent runs continuously: it subscribes to live sensor data via PI Web API We
 
 ## Tech Stack
 
-- **Runtime**: Node.js with ESM modules (`"type": "module"`)
+- **Runtime**: Bun (ESM modules, `"type": "module"`)
+- **Package manager**: Bun
 - **Language**: TypeScript (strict mode, ES2022 target, ESNext modules, bundler resolution)
 - **AI**: `@anthropic-ai/claude-agent-sdk` — uses `query()` for agentic tool-use loops and `tool()` / `createSdkMcpServer()` for in-process MCP tool servers
 - **Data Source**: OSIsoft PI Web API (REST + WebSocket channel streaming)
 - **HTTP**: axios (for PI REST API calls)
 - **WebSocket**: ws (for PI channel streaming)
 - **Validation**: zod (tool input schemas)
-- **Testing**: Jest 30 with ts-jest (ESM preset)
-- **Dev runner**: tsx
+- **Testing**: Bun's built-in test runner (`bun:test`)
 
 ## Repository Structure
 
@@ -33,6 +33,7 @@ src/
   pi-rest-client.ts     # PIRestClient — REST client for PI Web API (tag resolution, stream values, recorded history)
 
 tests/
+  shared-mocks.ts       # Shared mock factories for cross-file mock compatibility (Bun #12823 workaround)
   *.test.ts             # One test file per source module, 8 suites, ~80 tests
 ```
 
@@ -41,18 +42,18 @@ tests/
 ### Build and Run
 
 ```bash
-npm run build          # TypeScript compilation (tsc) → dist/
-npm run dev            # Run with tsx (no build step needed)
-npm start              # Run compiled output (dist/index.js)
+bun run build          # TypeScript compilation (tsc) → dist/
+bun run dev            # Run with bun (no build step needed, native TS support)
+bun run start          # Run compiled output (dist/index.js)
 ```
 
 ### Testing
 
 ```bash
-npm test               # Run all tests with Jest (ESM mode)
+bun test               # Run all tests with Bun's built-in test runner
 ```
 
-Jest is configured with `ts-jest/presets/default-esm` and requires `NODE_OPTIONS='--experimental-vm-modules'`. Tests live in `tests/` and use ESM dynamic imports with `jest.unstable_mockModule()` for mocking.
+Tests use `bun:test` module imports (`describe`, `it`, `expect`, `mock`, `jest`, `spyOn`) and `mock.module()` for module mocking with dynamic `await import()`. Tests live in `tests/`.
 
 ## Architecture
 
@@ -107,15 +108,16 @@ Optional:
 ## Testing Conventions
 
 - One test file per source module: `tests/<module>.test.ts`
-- ESM mocking pattern: `jest.unstable_mockModule()` followed by dynamic `await import()` for the module under test
+- Module mocking pattern: `mock.module()` from `bun:test` followed by dynamic `await import()` for the module under test
+- **Cross-file mock safety**: Bun runs all test files in a single process and `mock.module()` patches the global module cache ([oven-sh/bun#12823](https://github.com/oven-sh/bun/issues/12823)). To prevent leakage, every `mock.module()` call must provide ALL exports the module has. Use the shared factories in `tests/shared-mocks.ts` (`configMock()`, `sdkMock()`) when mocking `config` or the Agent SDK.
 - External dependencies (Agent SDK, axios, ws) are always mocked — tests never make real API calls
-- Console output is suppressed in tests via `jest.spyOn(console, 'log').mockImplementation()`
+- Console output is suppressed in tests via `spyOn(console, 'log').mockImplementation()`
 - Event-based tests use `done` callback pattern for async event assertions
 - `jest.useFakeTimers()` for reconnection/timing tests
 
 ## Code Conventions
 
-- All imports use `.js` extensions (ESM requirement, resolved to `.ts` by ts-jest via `moduleNameMapper`)
+- All imports use `.js` extensions (ESM requirement, resolved natively by Bun)
 - Strict TypeScript (`"strict": true`)
 - Interfaces are exported alongside classes (e.g., `ThresholdBreach`, `Alert`, `PIChannelConfig`)
 - `ThresholdRule` interface is defined in `config.ts` alongside the threshold data
