@@ -32,6 +32,23 @@ src/
   pi-channel-client.ts  # PIChannelClient — WebSocket client for PI streamsets/channel with auto-reconnect
   pi-rest-client.ts     # PIRestClient — REST client for PI Web API (tag resolution, stream values, recorded history)
 
+simulator/
+  index.ts              # Entry point — CLI arg parsing, server startup, graceful shutdown
+  server.ts             # SimulatorServer — HTTPS server, admin endpoints, 1 Hz tick loop
+  tag-registry.ts       # Tag metadata registry (WebId generation, path/tag/webId lookup)
+  data-generator.ts     # Ornstein-Uhlenbeck data generator with scenario modifier support
+  scenario-engine.ts    # Scenario lifecycle management (auto/manual modes, registration)
+  rest-handler.ts       # PI Web API REST handlers (points, streams/value, streams/recorded)
+  ws-handler.ts         # WebSocket channel handler (streamsets/channel, 1 Hz push to clients)
+  tls.ts                # Self-signed TLS certificate generation (openssl)
+  pi-time.ts            # PI time syntax parser (*-1h, *-30m, ISO 8601)
+  scenarios/
+    normal.ts           # Steady-state (no modifiers)
+    accumulator-decay.ts # Hydraulic leak — accumulator pressure decay over 8 min
+    kick-detection.ts   # Well kick — pit gain, flow increase, casing pressure rise over 5 min
+    ram-slowdown.ts     # Increasing BOP close times over 10 min
+    pod-failure.ts      # Blue pod battery drain and failure over 6 min
+
 tests/
   shared-mocks.ts       # Shared mock factories for cross-file mock compatibility (Bun #12823 workaround)
   *.test.ts             # One test file per source module, 8 suites, ~80 tests
@@ -45,6 +62,20 @@ tests/
 bun run build          # TypeScript compilation (tsc) → dist/
 bun run dev            # Run with bun (no build step needed, native TS support)
 bun run start          # Run compiled output (dist/index.js)
+```
+
+### Simulator
+
+```bash
+bun run simulator                     # Start PI API simulator (auto mode, port 8443)
+bun run simulator -- --scenario=kick-detection  # Start with a specific fault scenario
+bun run simulator -- --port=9443      # Custom port
+```
+
+Connect the agent to the simulator:
+
+```bash
+PI_SERVER=localhost:8443 PI_DATA_ARCHIVE=SIMULATOR PI_USERNAME=sim PI_PASSWORD=sim bun run dev
 ```
 
 ### Testing
@@ -85,6 +116,19 @@ The `BOPAgent` class uses two patterns from the Claude Agent SDK:
 
 Both use `permissionMode: 'bypassPermissions'` and restrict tools to the 5 BOP-specific MCP tools via `allowedTools`.
 
+### PI Web API Simulator
+
+The `simulator/` directory contains a standalone local PI Web API simulator for development without a real PI server. Key design points:
+
+- **Self-signed TLS**: Generates a temporary self-signed certificate at startup (requires `openssl` on PATH). Serves HTTPS REST and WSS WebSocket on the same port.
+- **Tag registry**: Mirrors all 25 monitored tags from `src/config.ts`. WebIds are deterministic (`SIM_` + base64url of tag name). The registry is self-contained — it does not import production code.
+- **Data generation**: Uses an Ornstein-Uhlenbeck process (mean-reverting random walk) for continuous tags, with per-tag nominal values, noise sigma, and clamp ranges. Discrete tags (positions, pod status) hold nominal until modified by a scenario.
+- **Scenario modifiers**: Scenarios register per-tag modifier functions `(nominal, elapsedMs) → newTarget` on the `DataGenerator`. The OU process then mean-reverts toward the modified target, producing smooth realistic transitions.
+- **1 Hz tick**: `SimulatorServer` runs a 1-second interval that calls `generator.tick()`, advancing all tag values. WebSocket clients receive updates at the same 1 Hz rate.
+- **History seeding**: On startup, 300 seconds of historical data are pre-generated so `/recorded` queries return data immediately.
+- **Admin API**: REST endpoints at `/admin/status`, `/admin/scenarios`, `/admin/scenario` (POST), `/admin/scenario/stop` (POST) for runtime control.
+- **Two modes**: Auto mode randomly triggers fault scenarios on a configurable interval. Manual mode (`--scenario=NAME`) runs a single scenario immediately.
+
 ## Environment Variables
 
 Required in `.env`:
@@ -104,6 +148,13 @@ Optional:
 | `MASP` | `12500` | Maximum anticipated surface pressure (PSI) |
 | `ANALYSIS_INTERVAL_MS` | `300000` | Periodic analysis interval (ms, default 5 min) |
 | `AGENT_MODEL` | `sonnet` | Claude model for agent analysis |
+
+Simulator (env vars or CLI flags):
+
+| Variable | Default | Description |
+|---|---|---|
+| `SIM_PORT` | `8443` | Simulator HTTPS/WSS port (CLI: `--port=`) |
+| `SIM_AUTO_INTERVAL_MS` | `600000` | Auto mode scenario interval in ms (CLI: `--interval=` in seconds) |
 
 ## Testing Conventions
 
