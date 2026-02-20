@@ -1,0 +1,24 @@
+services:
+  bop-agent:
+    build: .
+    container_name: bop-monitoring-agent
+    restart: unless-stopped
+    ports:
+      - "${HEALTH_PORT:-8080}:8080"
+    environment:
+      - PI_SERVER=${PI_SERVER}
+      - PI_DATA_ARCHIVE=${PI_DATA_ARCHIVE}
+      - PI_USERNAME=${PI_USERNAME}
+      - PI_PASSWORD=${PI_PASSWORD}
+      - BOP_RWP=${BOP_RWP:-15000}
+      - MASP=${MASP:-12500}
+      - ANALYSIS_INTERVAL_MS=${ANALYSIS_INTERVAL_MS:-300000}
+      - AGENT_MODEL=${AGENT_MODEL:-sonnet}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - HEALTH_PORT=8080
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
