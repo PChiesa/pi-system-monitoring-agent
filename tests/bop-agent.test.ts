@@ -6,9 +6,9 @@ let mockMessages: any[] = [];
 
 mock.module('../src/config', () => configMock());
 
-mock.module('../src/bop-system-prompt', () => ({
-  BOP_SYSTEM_PROMPT: 'Test system prompt',
-}));
+// Don't mock bop-system-prompt — let it use the real template with mocked config.
+// Mocking it here would leak 'Test system prompt' into bop-system-prompt.test.ts
+// because Bun's mock.module is global (oven-sh/bun#12823).
 
 const mockQuery = jest.fn((args: any) => {
   lastQueryArgs = args;
@@ -24,6 +24,7 @@ const mockQuery = jest.fn((args: any) => {
 mock.module('@anthropic-ai/claude-agent-sdk', () => sdkMock({ query: mockQuery }));
 
 const { BOPAgent } = await import('../src/bop-agent');
+const { BOP_SYSTEM_PROMPT } = await import('../src/bop-system-prompt');
 
 describe('BOPAgent', () => {
   const mockMcpServer = {
@@ -62,7 +63,7 @@ describe('BOPAgent', () => {
         expect.objectContaining({
           prompt: 'Test context',
           options: expect.objectContaining({
-            systemPrompt: 'Test system prompt',
+            systemPrompt: BOP_SYSTEM_PROMPT,
             model: 'sonnet',
             permissionMode: 'bypassPermissions',
             maxTurns: 25,
