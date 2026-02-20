@@ -26,7 +26,7 @@ PI Web API (WebSocket channel)
 
 ## Prerequisites
 
-- Node.js (ES2022+ support)
+- [Bun](https://bun.sh/) (v1.0+)
 - Access to an OSIsoft PI Web API server
 - An Anthropic API key (for the Claude Agent SDK)
 
@@ -42,7 +42,7 @@ cd bop-monitoring-agent
 2. Install dependencies:
 
 ```bash
-npm install
+bun install
 ```
 
 3. Create a `.env` file in the project root with your configuration:
@@ -63,17 +63,17 @@ AGENT_MODEL=sonnet           # Claude model for analysis, default sonnet
 
 ## Usage
 
-Development mode (runs directly via tsx, no build step):
+Development mode (runs directly via Bun, no build step needed):
 
 ```bash
-npm run dev
+bun run dev
 ```
 
 Production build and run:
 
 ```bash
-npm run build
-npm start
+bun run build
+bun run start
 ```
 
 Once running, the agent will:
@@ -112,27 +112,29 @@ src/
   pi-rest-client.ts     # PIRestClient — REST client for PI Web API
 
 tests/
+  shared-mocks.ts       # Shared mock factories (Bun #12823 workaround)
   *.test.ts             # One test file per source module (8 suites)
 ```
 
 ## Testing
 
 ```bash
-npm test
+bun test
 ```
 
-Tests run with Jest 30 in ESM mode (`--experimental-vm-modules`). All external dependencies (Agent SDK, axios, ws) are mocked — tests never make real API calls.
+Tests run with Bun's built-in test runner (`bun:test`). All external dependencies (Agent SDK, axios, ws) are mocked — tests never make real API calls.
 
 ## Tech Stack
 
-- **Runtime**: Node.js (ESM)
+- **Runtime**: Bun (ESM)
+- **Package manager**: Bun
 - **Language**: TypeScript (strict mode)
 - **AI**: Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`)
 - **Data Source**: OSIsoft PI Web API (REST + WebSocket)
 - **HTTP**: axios
 - **WebSocket**: ws
 - **Validation**: zod
-- **Testing**: Jest 30 + ts-jest
+- **Testing**: Bun's built-in test runner (`bun:test`)
 
 ## Regulatory Context
 
