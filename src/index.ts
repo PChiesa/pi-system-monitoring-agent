@@ -5,6 +5,7 @@ import { SensorStateManager, ThresholdBreach } from './sensor-state.js';
 import { AlertManager } from './alert-manager.js';
 import { createBOPToolsServer } from './bop-tools.js';
 import { BOPAgent } from './bop-agent.js';
+import { HealthServer } from './health.js';
 
 async function main() {
   console.log('===============================================');
@@ -15,6 +16,20 @@ async function main() {
   const piRest = new PIRestClient(PI_CONFIG.server, PI_CONFIG.username, PI_CONFIG.password);
   const sensorState = new SensorStateManager(300);
   const alertManager = new AlertManager();
+
+  // -- Health tracking state --
+  let piChannelConnected = false;
+  let lastSensorUpdate: Date | null = null;
+
+  const healthServer = new HealthServer(
+    {
+      isPiChannelConnected: () => piChannelConnected,
+      getSensorTagCount: () => Object.keys(MONITORED_TAGS).length,
+      getLastSensorUpdate: () => lastSensorUpdate,
+    },
+    Number(process.env.HEALTH_PORT || 8080)
+  );
+  await healthServer.start();
 
   // -- Resolve PI tags -> WebIds --
   console.log('Resolving PI tag WebIds...');
@@ -55,10 +70,14 @@ async function main() {
   });
 
   // -- Wire: PI channel -> sensor state --
+  piChannel.on('connected', () => { piChannelConnected = true; });
+  piChannel.on('close', () => { piChannelConnected = false; });
+
   piChannel.on('value', (event: any) => {
     const numericValue =
       typeof event.Value === 'number' ? event.Value : parseFloat(String(event.Value));
 
+    lastSensorUpdate = new Date();
     sensorState.update(event.webId, numericValue, new Date(event.Timestamp), event.Good);
   });
 
