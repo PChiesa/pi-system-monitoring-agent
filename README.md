@@ -88,6 +88,8 @@ Once running, the agent will:
 
 A local simulator is included for development and testing without a real PI Web API server. It generates realistic BOP sensor data using an Ornstein-Uhlenbeck process (mean-reverting random walk) for continuous tags and provides the same REST and WebSocket interfaces the agent expects.
 
+The simulator also includes a **Configuration UI**, **custom scenario builder**, and a **PI AF (Asset Framework) hierarchy simulator** for mapping tags to element attributes.
+
 ### Running the simulator
 
 ```bash
@@ -99,6 +101,23 @@ Then connect the agent in a separate terminal:
 ```bash
 PI_SERVER=localhost:8443 PI_DATA_ARCHIVE=SIMULATOR PI_USERNAME=sim PI_PASSWORD=sim bun run dev
 ```
+
+### Configuration UI
+
+The simulator ships with a React-based configuration UI accessible at `https://localhost:8443/ui/` once the simulator is running. The UI provides:
+
+- **Dashboard** — live tag values across all 6 subsystems with active scenario controls
+- **Tag Configuration** — edit tag profiles (nominal, sigma, min/max, discrete) at runtime; override individual tags to fixed values
+- **Scenario Builder** — create custom fault scenarios with per-tag modifiers, curve types (linear, step, exponential), and visual preview
+- **Asset Framework** — browse and edit the AF element hierarchy, map attributes to PI tags, view live attribute values
+
+To build the UI (required once, or after UI changes):
+
+```bash
+cd simulator/ui && npm install && npm run build
+```
+
+The built UI is served as static files by the simulator at `/ui/`. During development, you can run the Vite dev server separately (`cd simulator/ui && npm run dev`) — it proxies API requests to the simulator.
 
 ### CLI options
 
@@ -124,15 +143,57 @@ The simulator ships with five built-in scenarios that progressively push sensor 
 
 In **auto mode** (the default), the simulator randomly activates fault scenarios on a configurable interval. In **manual mode** (`--scenario=NAME`), a single scenario runs immediately.
 
+Custom scenarios can be created via the Configuration UI or the admin REST API. Each modifier defines a tag, start/end values, and a curve type (linear, step, or exponential).
+
+### Asset Framework (AF) Simulator
+
+The simulator includes a PI AF hierarchy that mirrors the BOP equipment structure. This enables testing of AF-aware clients without a real PI AF server.
+
+The default hierarchy is seeded on startup:
+
+```
+BOP_Database
+  └─ Rig
+       ├─ BOP Stack
+       │    ├─ Accumulator System     (4 attributes → BOP.ACC.*)
+       │    ├─ Annular Preventer      (3 attributes → BOP.ANN01.*)
+       │    ├─ Pipe Ram               (2 attributes → BOP.RAM.PIPE01.*)
+       │    ├─ Blind Shear Ram        (2 attributes → BOP.RAM.BSR01.*)
+       │    ├─ Manifold               (3 attributes → BOP.MAN.*, BOP.CHOKE.*, BOP.KILL.*)
+       │    └─ Control System
+       │         ├─ Blue Pod           (2 attributes → BOP.CTRL.*.BLUE.*)
+       │         └─ Yellow Pod         (2 attributes → BOP.CTRL.*.YELLOW.*)
+       └─ Wellbore                    (7 attributes → WELL.*)
+```
+
+AF endpoints follow the real PI Web API conventions (`/piwebapi/assetdatabases`, `/piwebapi/elements/{webId}`, `/piwebapi/attributes/{webId}/value`, etc.). Elements and attributes can be created, updated, and deleted via the admin API or the Configuration UI.
+
 ### Admin API
 
 While the simulator is running, use the admin endpoints to inspect and control it:
 
 ```bash
-curl -k https://localhost:8443/admin/status                                      # Server status
-curl -k https://localhost:8443/admin/scenarios                                   # List available scenarios
-curl -k -X POST https://localhost:8443/admin/scenario -d '{"name":"kick-detection"}'  # Activate a scenario
-curl -k -X POST https://localhost:8443/admin/scenario/stop                       # Stop active scenario
+# Status & scenarios
+curl -k https://localhost:8443/admin/status
+curl -k https://localhost:8443/admin/scenarios
+curl -k -X POST https://localhost:8443/admin/scenario -d '{"name":"kick-detection"}'
+curl -k -X POST https://localhost:8443/admin/scenario/stop
+
+# Tag configuration
+curl -k https://localhost:8443/admin/tags
+curl -k -X PUT https://localhost:8443/admin/tags/BOP.ACC.PRESS.SYS/profile -d '{"nominal":2500,"sigma":20}'
+curl -k -X POST https://localhost:8443/admin/tags/BOP.ACC.PRESS.SYS/override -d '{"value":1000}'
+curl -k -X DELETE https://localhost:8443/admin/tags/BOP.ACC.PRESS.SYS/override
+
+# Custom scenarios
+curl -k https://localhost:8443/admin/scenarios/custom
+curl -k -X POST https://localhost:8443/admin/scenarios/custom -d '{"name":"my-leak","description":"Custom leak","durationMs":300000,"modifiers":[{"tagName":"BOP.ACC.PRESS.SYS","startValue":3000,"endValue":1500,"curveType":"linear"}]}'
+curl -k -X DELETE https://localhost:8443/admin/scenarios/custom/my-leak
+
+# Asset Framework
+curl -k https://localhost:8443/piwebapi/assetdatabases
+curl -k https://localhost:8443/piwebapi/elements/{webId}/attributes
+curl -k https://localhost:8443/piwebapi/attributes/{webId}/value
 ```
 
 ## Monitored Tags
@@ -164,12 +225,16 @@ src/
 
 simulator/
   index.ts              # Entry point — CLI argument parsing, server startup
-  server.ts             # SimulatorServer — HTTPS server, admin endpoints, 1 Hz tick loop
+  server.ts             # SimulatorServer — HTTPS server, admin endpoints, static UI serving, 1 Hz tick
   tag-registry.ts       # Tag metadata registry (WebId generation, path lookup)
-  data-generator.ts     # Ornstein-Uhlenbeck data generator with scenario modifiers
-  scenario-engine.ts    # Scenario lifecycle management (auto/manual modes)
+  data-generator.ts     # Ornstein-Uhlenbeck data generator with scenario modifiers and runtime profile updates
+  scenario-engine.ts    # Scenario lifecycle management (auto/manual modes, custom scenario support)
   rest-handler.ts       # PI Web API REST endpoint handlers (points, streams, recorded)
   ws-handler.ts         # WebSocket channel handler (streamsets/channel, 1 Hz push)
+  af-model.ts           # PI AF hierarchy — in-memory database/element/attribute model with BOP seed data
+  af-handler.ts         # PI Web API AF endpoint handlers (assetdatabases, elements, attributes)
+  custom-scenario.ts    # Custom scenario builder — creates Scenario objects from JSON definitions
+  utils.ts              # Shared utilities (sendJson, readBody)
   tls.ts                # Self-signed TLS certificate generation
   pi-time.ts            # PI time syntax parser (*-1h, *-30m, ISO 8601)
   scenarios/
@@ -178,6 +243,13 @@ simulator/
     kick-detection.ts   # Well kick — pit gain, flow increase, casing pressure rise
     ram-slowdown.ts     # Increasing BOP close times — seal wear / N2 depletion
     pod-failure.ts      # Blue pod battery drain and failure
+  ui/                   # React configuration UI (separate Vite project)
+    src/
+      App.tsx           # Router: Dashboard | Tags | Scenarios | Asset Framework
+      pages/            # Dashboard, tag config, scenario builder, AF browser
+      hooks/            # useLiveValues (WebSocket), useTags, useStatus
+      lib/api.ts        # Typed fetch wrapper for admin + PI Web API endpoints
+      components/ui/    # shadcn/ui primitives (button, card, dialog, table, etc.)
 
 tests/
   shared-mocks.ts       # Shared mock factories (Bun #12823 workaround)
@@ -203,6 +275,7 @@ Tests run with Bun's built-in test runner (`bun:test`). All external dependencie
 - **WebSocket**: ws
 - **Validation**: zod
 - **Testing**: Bun's built-in test runner (`bun:test`)
+- **Simulator UI**: React 19, Vite, Tailwind CSS v4, shadcn/ui
 
 ## Regulatory Context
 

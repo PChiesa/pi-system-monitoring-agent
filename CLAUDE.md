@@ -17,6 +17,7 @@ The agent runs continuously: it subscribes to live sensor data via PI Web API We
 - **WebSocket**: ws (for PI channel streaming)
 - **Validation**: zod (tool input schemas)
 - **Testing**: Bun's built-in test runner (`bun:test`)
+- **Simulator UI**: React 19 + Vite + Tailwind CSS v4 (CSS-first config) + shadcn/ui — separate project in `simulator/ui/`
 
 ## Repository Structure
 
@@ -34,12 +35,16 @@ src/
 
 simulator/
   index.ts              # Entry point — CLI arg parsing, server startup, graceful shutdown
-  server.ts             # SimulatorServer — HTTPS server, admin endpoints, 1 Hz tick loop
+  server.ts             # SimulatorServer — HTTPS server, admin endpoints, static UI serving, 1 Hz tick loop
   tag-registry.ts       # Tag metadata registry (WebId generation, path/tag/webId lookup)
-  data-generator.ts     # Ornstein-Uhlenbeck data generator with scenario modifier support
-  scenario-engine.ts    # Scenario lifecycle management (auto/manual modes, registration)
-  rest-handler.ts       # PI Web API REST handlers (points, streams/value, streams/recorded)
+  data-generator.ts     # Ornstein-Uhlenbeck data generator with scenario modifiers and runtime profile updates
+  scenario-engine.ts    # Scenario lifecycle management (auto/manual modes, custom scenario support)
+  rest-handler.ts       # PI Web API REST endpoint handlers (points, streams, recorded)
   ws-handler.ts         # WebSocket channel handler (streamsets/channel, 1 Hz push to clients)
+  af-model.ts           # PI AF hierarchy — in-memory database/element/attribute model with BOP seed data
+  af-handler.ts         # PI Web API AF endpoint handlers (assetdatabases, elements, attributes)
+  custom-scenario.ts    # Custom scenario builder — creates Scenario objects from JSON definitions
+  utils.ts              # Shared utilities (sendJson, readBody)
   tls.ts                # Self-signed TLS certificate generation (openssl)
   pi-time.ts            # PI time syntax parser (*-1h, *-30m, ISO 8601)
   scenarios/
@@ -48,6 +53,13 @@ simulator/
     kick-detection.ts   # Well kick — pit gain, flow increase, casing pressure rise over 5 min
     ram-slowdown.ts     # Increasing BOP close times over 10 min
     pod-failure.ts      # Blue pod battery drain and failure over 6 min
+  ui/                   # React configuration UI (separate Vite project)
+    src/
+      App.tsx           # Router: Dashboard | Tags | Scenarios | Asset Framework
+      pages/            # Dashboard, tag config, scenario builder, AF browser
+      hooks/            # useLiveValues (WebSocket), useTags, useStatus
+      lib/api.ts        # Typed fetch wrapper for admin + PI Web API endpoints
+      components/ui/    # shadcn/ui primitives (button, card, dialog, table, etc.)
 
 tests/
   shared-mocks.ts       # Shared mock factories for cross-file mock compatibility (Bun #12823 workaround)
@@ -77,6 +89,14 @@ Connect the agent to the simulator:
 ```bash
 PI_SERVER=localhost:8443 PI_DATA_ARCHIVE=SIMULATOR PI_USERNAME=sim PI_PASSWORD=sim bun run dev
 ```
+
+### Simulator Configuration UI
+
+```bash
+cd simulator/ui && npm install && npm run build   # Build UI (required once, or after UI changes)
+```
+
+The built UI is served at `https://localhost:8443/ui/` by the simulator. During development, run the Vite dev server separately (`cd simulator/ui && npm run dev`) — it proxies API requests to the simulator.
 
 ### Testing
 
@@ -123,11 +143,16 @@ The `simulator/` directory contains a standalone local PI Web API simulator for 
 - **Self-signed TLS**: Generates a temporary self-signed certificate at startup (requires `openssl` on PATH). Serves HTTPS REST and WSS WebSocket on the same port.
 - **Tag registry**: Mirrors all 25 monitored tags from `src/config.ts`. WebIds are deterministic (`SIM_` + base64url of tag name). The registry is self-contained — it does not import production code.
 - **Data generation**: Uses an Ornstein-Uhlenbeck process (mean-reverting random walk) for continuous tags, with per-tag nominal values, noise sigma, and clamp ranges. Discrete tags (positions, pod status) hold nominal until modified by a scenario.
+- **Runtime profile editing**: `DataGenerator.updateProfile()` allows changing tag nominal, sigma, min, max, and discrete flag at runtime. `setOverride()`/`clearOverride()` force a tag to a fixed value, bypassing OU generation.
 - **Scenario modifiers**: Scenarios register per-tag modifier functions `(nominal, elapsedMs) → newTarget` on the `DataGenerator`. The OU process then mean-reverts toward the modified target, producing smooth realistic transitions.
+- **Custom scenarios**: `custom-scenario.ts` builds `Scenario` objects from JSON definitions with per-tag modifiers supporting linear, step, and exponential curve types. Custom scenarios are stored in-memory and managed via CRUD admin endpoints.
 - **1 Hz tick**: `SimulatorServer` runs a 1-second interval that calls `generator.tick()`, advancing all tag values. WebSocket clients receive updates at the same 1 Hz rate.
 - **History seeding**: On startup, 300 seconds of historical data are pre-generated so `/recorded` queries return data immediately.
-- **Admin API**: REST endpoints at `/admin/status`, `/admin/scenarios`, `/admin/scenario` (POST), `/admin/scenario/stop` (POST) for runtime control.
+- **Asset Framework (AF)**: `af-model.ts` provides an in-memory AF hierarchy (databases → elements → attributes) seeded with the BOP equipment structure. `af-handler.ts` exposes PI Web API-compatible AF endpoints (`/piwebapi/assetdatabases`, `/elements`, `/attributes`). Attributes map to PI tags via `piPointName`, resolving live values from the `DataGenerator`.
+- **Admin API**: REST endpoints for status/scenarios (`/admin/status`, `/admin/scenarios`, `/admin/scenario`), tag profiles (`/admin/tags`, `/admin/tags/:tagName/profile`, `/admin/tags/:tagName/override`), custom scenarios (`/admin/scenarios/custom`), and AF CRUD (`/admin/af/*`).
+- **Configuration UI**: React SPA served at `/ui/` with dashboard (live values), tag configuration (profile editing, overrides), scenario builder (custom scenarios with curve preview), and AF browser (tree view, attribute management). Built separately via Vite (`simulator/ui/`).
 - **Two modes**: Auto mode randomly triggers fault scenarios on a configurable interval. Manual mode (`--scenario=NAME`) runs a single scenario immediately.
+- **CORS**: Dev-friendly CORS headers allow the Vite dev server to proxy requests to the simulator.
 
 ## Environment Variables
 

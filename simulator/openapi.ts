@@ -637,7 +637,8 @@ export function getOpenApiSpec(ctx: OpenApiContext): object {
             'Otherwise, all tags are subscribed (element-level behavior). ' +
             'This endpoint requires a WebSocket upgrade (`Connection: Upgrade`).\n\n' +
             '**Protocol:** `wss://`\n\n' +
-            '**Message format:** Same as the ad-hoc `/streamsets/channel` endpoint.',
+            '**Message format:** Same as the ad-hoc `/streamsets/channel` endpoint.\n\n' +
+            `**Interactive test page:** [Open WebSocket Test UI](https://localhost:${port}/ws-test) to connect and view live streaming data in your browser.`,
           operationId: 'streamChannelByWebId',
           parameters: [
             {
@@ -972,7 +973,13 @@ export function getOpenApiSpec(ctx: OpenApiContext): object {
  * Users can select tags, connect to the WSS channel, and see live
  * sensor values updating in real-time at 1 Hz.
  */
-export function getWsTestHtml(port: number, tags: TagMeta[]): string {
+export interface AFElementInfo {
+  webId: string;
+  name: string;
+  path: string;
+}
+
+export function getWsTestHtml(port: number, tags: TagMeta[], elements: AFElementInfo[] = []): string {
   const tagGroups: Record<string, TagMeta[]> = {};
   for (const t of tags) {
     const prefix = t.tagName.split('.').slice(0, 2).join('.');
@@ -996,6 +1003,8 @@ export function getWsTestHtml(port: number, tags: TagMeta[]): string {
     webId: t.webId,
     unit: t.unit,
   })));
+
+  const elementsJson = JSON.stringify(elements);
 
   const groupCheckboxes = Object.entries(tagGroups).map(([group, groupTags]) => {
     const checkboxes = groupTags.map(t =>
@@ -1057,6 +1066,18 @@ export function getWsTestHtml(port: number, tags: TagMeta[]): string {
       cursor: pointer; color: var(--text); }
     .tag-label input { margin-right: 6px; }
     .unit { color: var(--text-dim); font-size: 12px; }
+    .mode-toggle { margin-bottom: 12px; display: flex; border: 1px solid var(--border);
+      border-radius: 6px; overflow: hidden; }
+    .mode-toggle button { flex: 1; padding: 6px 8px; font-size: 12px; background: var(--surface);
+      color: var(--text-dim); border: none; cursor: pointer; font-weight: 500; }
+    .mode-toggle button.active { background: var(--accent); color: #fff; }
+    .element-picker { margin-bottom: 12px; }
+    .element-picker select { width: 100%; padding: 6px 8px; font-size: 12px;
+      background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; }
+    .element-picker option { padding: 4px 0; }
+    .element-picker .path-hint { font-size: 11px; color: var(--text-dim); margin-top: 4px;
+      word-break: break-all; }
     .select-actions { margin-bottom: 12px; display: flex; gap: 8px; }
     .select-actions button { background: none; border: none; color: var(--accent);
       font-size: 12px; cursor: pointer; padding: 0; }
@@ -1101,11 +1122,29 @@ export function getWsTestHtml(port: number, tags: TagMeta[]): string {
   </header>
   <div class="container">
     <div class="sidebar">
-      <div class="select-actions">
-        <button onclick="toggleAll(true)">Select All</button>
-        <button onclick="toggleAll(false)">Deselect All</button>
+      <div class="mode-toggle">
+        <button id="modeTagBtn" class="active" onclick="setMode('tags')">Tags</button>
+        <button id="modeElementBtn" onclick="setMode('element')">Element Path</button>
       </div>
+      <div id="tagMode">
+        <div class="select-actions">
+          <button onclick="toggleAll(true)">Select All</button>
+          <button onclick="toggleAll(false)">Deselect All</button>
+        </div>
 ${groupCheckboxes}
+      </div>
+      <div id="elementMode" style="display:none;">
+        <div class="element-picker">
+          <label style="font-size:12px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">AF Element</label>
+          <select id="elementSelect" onchange="onElementSelect()">
+            <option value="">— Select an element —</option>
+          </select>
+          <div id="elementPath" class="path-hint"></div>
+        </div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:8px;">
+          Connects via <code style="color:var(--accent);font-size:11px;">/streamsets/{webId}/channel</code> — subscribes to all tags under the selected element.
+        </div>
+      </div>
     </div>
     <div class="main">
       <div class="controls">
@@ -1142,9 +1181,37 @@ ${groupCheckboxes}
 <script>
 const PORT = ${port};
 const TAGS = ${tagsJson};
+const ELEMENTS = ${elementsJson};
 let ws = null;
 let msgTotal = 0;
 let msgWindow = [];
+let connectionMode = 'tags'; // 'tags' or 'element'
+
+// Populate element dropdown
+(function() {
+  const sel = document.getElementById('elementSelect');
+  for (const el of ELEMENTS) {
+    const opt = document.createElement('option');
+    opt.value = el.webId;
+    opt.textContent = el.name;
+    opt.dataset.path = el.path;
+    sel.appendChild(opt);
+  }
+})();
+
+function setMode(mode) {
+  connectionMode = mode;
+  document.getElementById('modeTagBtn').className = mode === 'tags' ? 'active' : '';
+  document.getElementById('modeElementBtn').className = mode === 'element' ? 'active' : '';
+  document.getElementById('tagMode').style.display = mode === 'tags' ? '' : 'none';
+  document.getElementById('elementMode').style.display = mode === 'element' ? '' : 'none';
+}
+
+function onElementSelect() {
+  const sel = document.getElementById('elementSelect');
+  const opt = sel.options[sel.selectedIndex];
+  document.getElementById('elementPath').textContent = opt.dataset.path || '';
+}
 
 // Group toggles
 document.querySelectorAll('.group-toggle').forEach(toggle => {
@@ -1175,17 +1242,28 @@ function toggleConnection() {
 }
 
 function connect() {
-  const webIds = getSelectedWebIds();
-  if (webIds.length === 0) { alert('Select at least one tag.'); return; }
+  let url;
+  let label;
 
-  const params = webIds.map(id => 'webId=' + encodeURIComponent(id)).join('&');
-  const url = 'wss://localhost:' + PORT + '/piwebapi/streamsets/channel?' + params + '&includeInitialValues=true';
+  if (connectionMode === 'element') {
+    const elWebId = document.getElementById('elementSelect').value;
+    if (!elWebId) { alert('Select an AF element.'); return; }
+    const elName = document.getElementById('elementSelect').options[document.getElementById('elementSelect').selectedIndex].textContent;
+    url = 'wss://localhost:' + PORT + '/piwebapi/streamsets/' + encodeURIComponent(elWebId) + '/channel?includeInitialValues=true';
+    label = 'element: ' + elName;
+  } else {
+    const webIds = getSelectedWebIds();
+    if (webIds.length === 0) { alert('Select at least one tag.'); return; }
+    const params = webIds.map(id => 'webId=' + encodeURIComponent(id)).join('&');
+    url = 'wss://localhost:' + PORT + '/piwebapi/streamsets/channel?' + params + '&includeInitialValues=true';
+    label = webIds.length + ' tags';
+  }
 
   setStatus('', 'Connecting...');
   ws = new WebSocket(url);
 
   ws.onopen = () => {
-    setStatus('connected', 'Connected (' + webIds.length + ' tags)');
+    setStatus('connected', 'Connected (' + label + ')');
     addLogSys('Connected to ' + url);
     document.getElementById('connectBtn').textContent = 'Disconnect';
     document.getElementById('connectBtn').className = 'btn btn-disconnect';

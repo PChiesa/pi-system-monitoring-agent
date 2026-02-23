@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
 import { TagRegistry } from './tag-registry.js';
 import { DataGenerator, PIStreamValue } from './data-generator.js';
+import { AFModel } from './af-model.js';
 
 export interface ChannelSession {
   ws: WebSocket;
@@ -14,6 +15,7 @@ export class WSHandler {
   private wss: WebSocketServer;
   private registry: TagRegistry;
   private generator: DataGenerator;
+  private afModel: AFModel | null = null;
   private sessions: Set<ChannelSession> = new Set();
 
   constructor(registry: TagRegistry, generator: DataGenerator) {
@@ -50,6 +52,11 @@ export class WSHandler {
     return false;
   }
 
+  /** Set the AF model so element WebIds can be resolved to their attribute tags. */
+  setAFModel(afModel: AFModel): void {
+    this.afModel = afModel;
+  }
+
   /** Number of active WebSocket sessions. */
   get sessionCount(): number {
     return this.sessions.size;
@@ -82,8 +89,34 @@ export class WSHandler {
       const meta = this.registry.getByWebId(pathWebId);
       if (meta) {
         webIds = [pathWebId];
+      } else if (this.afModel) {
+        // Resolve AF element to its attribute PI tag WebIds
+        const attrs = this.afModel.getAttributes(pathWebId);
+        const resolved: string[] = [];
+        for (const attr of attrs) {
+          if (attr.piPointName) {
+            const tagMeta = this.registry.getByTagName(attr.piPointName);
+            if (tagMeta) resolved.push(tagMeta.webId);
+          }
+        }
+        // If the element has child elements, also collect their attributes recursively
+        if (resolved.length === 0) {
+          const collectChildTags = (elementWebId: string) => {
+            const childAttrs = this.afModel!.getAttributes(elementWebId);
+            for (const a of childAttrs) {
+              if (a.piPointName) {
+                const tm = this.registry.getByTagName(a.piPointName);
+                if (tm) resolved.push(tm.webId);
+              }
+            }
+            for (const child of this.afModel!.getChildElements(elementWebId)) {
+              collectChildTags(child.webId);
+            }
+          };
+          collectChildTags(pathWebId);
+        }
+        webIds = resolved.length > 0 ? resolved : this.registry.getAllWebIds();
       } else {
-        // Treat as element-level: subscribe to all tags
         webIds = this.registry.getAllWebIds();
       }
     } else {

@@ -102,6 +102,31 @@ export class TagRegistry {
     return [...this.byWebId.keys()];
   }
 
+  /** Register a new tag at runtime. Throws if tagName already exists. */
+  register(tagName: string, unit: string): TagMeta {
+    if (this.byTag.has(tagName)) {
+      throw new Error(`Tag "${tagName}" already exists`);
+    }
+    const meta: TagMeta = {
+      tagName,
+      webId: makeWebId(tagName),
+      unit,
+      path: `\\\\${this.dataArchive}\\${tagName}`,
+    };
+    this.byTag.set(tagName, meta);
+    this.byWebId.set(meta.webId, meta);
+    return meta;
+  }
+
+  /** Remove a tag at runtime. Returns false if tag not found. */
+  unregister(tagName: string): boolean {
+    const meta = this.byTag.get(tagName);
+    if (!meta) return false;
+    this.byTag.delete(tagName);
+    this.byWebId.delete(meta.webId);
+    return true;
+  }
+
   get size(): number {
     return this.byTag.size;
   }

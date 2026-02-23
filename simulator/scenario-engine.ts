@@ -15,6 +15,8 @@ export interface Scenario {
   deactivate(generator: DataGenerator): void;
 }
 
+const BUILT_IN_SCENARIOS = ['normal', 'accumulator-decay', 'kick-detection', 'ram-slowdown', 'pod-failure'];
+
 export class ScenarioEngine {
   private scenarios = new Map<string, Scenario>();
   private generator: DataGenerator;
@@ -36,6 +38,19 @@ export class ScenarioEngine {
 
   register(scenario: Scenario): void {
     this.scenarios.set(scenario.name, scenario);
+  }
+
+  /** Remove a scenario by name. Deactivates it first if active. Returns true if found. */
+  unregister(name: string): boolean {
+    if (this.activeScenario?.scenario.name === name) {
+      this.deactivate();
+    }
+    return this.scenarios.delete(name);
+  }
+
+  /** Check if a scenario is a built-in (non-removable) scenario. */
+  isBuiltIn(name: string): boolean {
+    return BUILT_IN_SCENARIOS.includes(name);
   }
 
   /** Activate a scenario by name. Returns true if found and activated. */

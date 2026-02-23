@@ -1,16 +1,22 @@
 import { TagRegistry } from './tag-registry.js';
 
+export type ValueType = 'number' | 'boolean' | 'string';
+
 export interface TagProfile {
+  valueType?: ValueType;
   nominal: number;
   sigma: number;
   min?: number;
   max?: number;
   discrete?: boolean;
+  booleanDefault?: boolean;
+  stringDefault?: string;
+  stringOptions?: string[];
 }
 
 export interface PIStreamValue {
   Timestamp: string;
-  Value: number;
+  Value: number | boolean | string;
   UnitsAbbreviation: string;
   Good: boolean;
   Questionable: boolean;
@@ -60,9 +66,10 @@ function randn(): number {
 export type ScenarioModifier = (currentNominal: number, elapsedMs: number) => number;
 
 interface TagState {
-  value: number;
+  value: number | boolean | string;
   profile: TagProfile;
   modifier: ScenarioModifier | null;
+  override: number | boolean | string | null;
 }
 
 export class DataGenerator {
@@ -85,9 +92,38 @@ export class DataGenerator {
         value: profile.nominal,
         profile,
         modifier: null,
+        override: null,
       });
       this.history.set(meta.tagName, []);
     }
+  }
+
+  /** Register a new tag at runtime (for dynamically created tags). */
+  registerTag(tagName: string, profile: TagProfile): void {
+    const vt = profile.valueType ?? 'number';
+    let initialValue: number | boolean | string;
+    if (vt === 'boolean') {
+      initialValue = profile.booleanDefault ?? false;
+    } else if (vt === 'string') {
+      initialValue = profile.stringDefault ?? '';
+    } else {
+      initialValue = profile.nominal;
+    }
+    this.tags.set(tagName, {
+      value: initialValue,
+      profile,
+      modifier: null,
+      override: null,
+    });
+    this.history.set(tagName, []);
+  }
+
+  /** Remove a tag at runtime. Returns false if tag not found. */
+  unregisterTag(tagName: string): boolean {
+    if (!this.tags.has(tagName)) return false;
+    this.tags.delete(tagName);
+    this.history.delete(tagName);
+    return true;
   }
 
   /** Advance all tags by one tick and record history. */
@@ -95,13 +131,13 @@ export class DataGenerator {
     const results = new Map<string, PIStreamValue>();
 
     for (const [tagName, state] of this.tags) {
-      const value = this.generateNext(tagName, state);
-      state.value = value;
+      const rawValue = state.override !== null ? state.override : this.generateNext(tagName, state);
+      state.value = rawValue;
 
       const meta = this.registry.getByTagName(tagName);
       const sv: PIStreamValue = {
         Timestamp: timestamp.toISOString(),
-        Value: Math.round(value * 100) / 100,
+        Value: typeof rawValue === 'number' ? Math.round(rawValue * 100) / 100 : rawValue,
         UnitsAbbreviation: meta?.unit ?? '',
         Good: true,
         Questionable: false,
@@ -190,8 +226,67 @@ export class DataGenerator {
     return this.tags.get(tagName)?.profile;
   }
 
-  private generateNext(tagName: string, state: TagState): number {
+  /** Update a tag's profile. Changes take effect on the next tick via OU mean-reversion. */
+  updateProfile(tagName: string, updates: Partial<TagProfile>): boolean {
+    const state = this.tags.get(tagName);
+    if (!state) return false;
+    state.profile = { ...state.profile, ...updates };
+    return true;
+  }
+
+  /** Get all tag profiles as a Map. */
+  getAllProfiles(): Map<string, TagProfile> {
+    const result = new Map<string, TagProfile>();
+    for (const [name, state] of this.tags) {
+      result.set(name, { ...state.profile });
+    }
+    return result;
+  }
+
+  /** Force a tag to a fixed value, bypassing generation. */
+  setOverride(tagName: string, value: number | boolean | string): boolean {
+    const state = this.tags.get(tagName);
+    if (!state) return false;
+    state.override = value;
+    return true;
+  }
+
+  /** Remove a tag's override, returning it to generated values. */
+  clearOverride(tagName: string): boolean {
+    const state = this.tags.get(tagName);
+    if (!state) return false;
+    state.override = null;
+    return true;
+  }
+
+  /** Check if a tag has an active override. */
+  hasOverride(tagName: string): boolean {
+    return this.tags.get(tagName)?.override !== null;
+  }
+
+  private generateNext(tagName: string, state: TagState): number | boolean | string {
     const { profile, modifier } = state;
+    const vt = profile.valueType ?? 'number';
+
+    if (vt === 'boolean') {
+      if (modifier && this.scenarioStartTime !== null) {
+        const elapsed = Date.now() - this.scenarioStartTime;
+        const numResult = modifier(profile.booleanDefault ? 1 : 0, elapsed);
+        return numResult >= 0.5;
+      }
+      return profile.booleanDefault ?? false;
+    }
+
+    if (vt === 'string') {
+      if (modifier && this.scenarioStartTime !== null) {
+        const elapsed = Date.now() - this.scenarioStartTime;
+        const numResult = modifier(0, elapsed);
+        const options = profile.stringOptions ?? [profile.stringDefault ?? ''];
+        const idx = Math.max(0, Math.min(Math.floor(numResult), options.length - 1));
+        return options[idx] ?? profile.stringDefault ?? '';
+      }
+      return profile.stringDefault ?? '';
+    }
 
     if (profile.discrete) {
       // Discrete tags: use modifier target or hold nominal
@@ -211,9 +306,10 @@ export class DataGenerator {
 
     // Ornstein-Uhlenbeck: mean-reverts toward target
     const dt = 1; // 1 second tick
+    const currentValue = state.value as number;
     const noise = profile.sigma * Math.sqrt(dt) * randn();
-    const drift = THETA * (target - state.value) * dt;
-    let next = state.value + drift + noise;
+    const drift = THETA * (target - currentValue) * dt;
+    let next = currentValue + drift + noise;
 
     // Clamp
     if (profile.min !== undefined) next = Math.max(profile.min, next);
