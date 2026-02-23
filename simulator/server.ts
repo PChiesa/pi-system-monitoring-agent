@@ -6,7 +6,7 @@ import { ScenarioEngine } from './scenario-engine.js';
 import { createRestHandler } from './rest-handler.js';
 import { WSHandler } from './ws-handler.js';
 import { generateSelfSignedCert } from './tls.js';
-import { getOpenApiSpec, getExplorerHtml } from './openapi.js';
+import { getOpenApiSpec, getExplorerHtml, getWsTestHtml } from './openapi.js';
 
 export interface SimulatorConfig {
   port: number;
@@ -68,6 +68,7 @@ export class SimulatorServer {
         console.log(`[PI Simulator] Admin:      https://localhost:${this.config.port}/admin/status`);
         console.log(`[PI Simulator] OpenAPI:    https://localhost:${this.config.port}/openapi.json`);
         console.log(`[PI Simulator] Explorer:   https://localhost:${this.config.port}/docs`);
+        console.log(`[PI Simulator] WS Test:    https://localhost:${this.config.port}/ws-test`);
 
         // Start 1 Hz tick
         this.tickInterval = setInterval(() => {
@@ -125,6 +126,12 @@ export class SimulatorServer {
     if ((url.pathname === '/docs' || url.pathname === '/docs/') && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(getExplorerHtml(this.config.port));
+      return;
+    }
+
+    if ((url.pathname === '/ws-test' || url.pathname === '/ws-test/') && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(getWsTestHtml(this.config.port, this.registry.getAllMeta()));
       return;
     }
 

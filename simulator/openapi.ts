@@ -89,6 +89,28 @@ export function getOpenApiSpec(ctx: OpenApiContext): object {
         },
       },
 
+      '/ws-test': {
+        get: {
+          tags: ['Meta'],
+          summary: 'WebSocket stream test page',
+          description:
+            'Interactive browser-based UI for testing the WebSocket streaming channel. ' +
+            'Select tags, connect to the `wss://` channel, and view live sensor values updating at 1 Hz. ' +
+            'Includes a live-updating values table and a scrolling message log.',
+          operationId: 'getWsTestPage',
+          responses: {
+            '200': {
+              description: 'HTML page with the WebSocket test UI',
+              content: {
+                'text/html': {
+                  schema: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+
       // ── PI Web API compatible endpoints ──────────────────────────
 
       '/piwebapi/points': {
@@ -269,7 +291,8 @@ export function getOpenApiSpec(ctx: OpenApiContext): object {
             'This endpoint requires a WebSocket upgrade (`Connection: Upgrade`) — it cannot be called as a regular HTTP request.\n\n' +
             '**Protocol:** `wss://`\n\n' +
             '**Message format:** Each message is a JSON object with an `Items` array, where each item contains ' +
-            '`WebId`, `Name`, `Path`, and an `Items` array with the latest `PIStreamValue`.',
+            '`WebId`, `Name`, `Path`, and an `Items` array with the latest `PIStreamValue`.\n\n' +
+            `**Interactive test page:** [Open WebSocket Test UI](https://localhost:${port}/ws-test) to connect and view live streaming data in your browser.`,
           operationId: 'streamChannel',
           parameters: [
             {
@@ -548,6 +571,343 @@ export function getOpenApiSpec(ctx: OpenApiContext): object {
       { name: 'Meta', description: 'API metadata and documentation.' },
     ],
   };
+}
+
+/**
+ * Returns an HTML page for interactive WebSocket streaming testing.
+ *
+ * Users can select tags, connect to the WSS channel, and see live
+ * sensor values updating in real-time at 1 Hz.
+ */
+export function getWsTestHtml(port: number, tags: TagMeta[]): string {
+  const tagGroups: Record<string, TagMeta[]> = {};
+  for (const t of tags) {
+    const prefix = t.tagName.split('.').slice(0, 2).join('.');
+    const group = ({
+      'BOP.ACC': 'Accumulator',
+      'BOP.ANN01': 'Annular Preventer',
+      'BOP.RAM': 'Ram Preventers',
+      'BOP.MAN': 'Manifold & Lines',
+      'BOP.CHOKE': 'Manifold & Lines',
+      'BOP.KILL': 'Manifold & Lines',
+      'BOP.CTRL': 'Control System',
+      'WELL.PRESS': 'Wellbore',
+      'WELL.FLOW': 'Wellbore',
+      'WELL.PIT': 'Wellbore',
+    } as Record<string, string>)[prefix] ?? 'Other';
+    (tagGroups[group] ??= []).push(t);
+  }
+
+  const tagsJson = JSON.stringify(tags.map(t => ({
+    tagName: t.tagName,
+    webId: t.webId,
+    unit: t.unit,
+  })));
+
+  const groupCheckboxes = Object.entries(tagGroups).map(([group, groupTags]) => {
+    const checkboxes = groupTags.map(t =>
+      `<label class="tag-label"><input type="checkbox" value="${t.webId}" data-tag="${t.tagName}" data-unit="${t.unit}" checked />${t.tagName}${t.unit ? ' <span class="unit">(' + t.unit + ')</span>' : ''}</label>`
+    ).join('\n            ');
+    return `
+          <div class="tag-group">
+            <div class="group-header">
+              <label><input type="checkbox" class="group-toggle" checked />${group}</label>
+            </div>
+            ${checkboxes}
+          </div>`;
+  }).join('\n');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PI Web API Simulator — WebSocket Test</title>
+  <style>
+    :root {
+      --bg: #0d1117; --surface: #161b22; --border: #30363d;
+      --text: #e6edf3; --text-dim: #8b949e; --accent: #58a6ff;
+      --green: #3fb950; --red: #f85149; --yellow: #d29922;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background: var(--bg); color: var(--text); line-height: 1.5; }
+    header { background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 12px 24px; display: flex; align-items: center; gap: 16px; }
+    header h1 { font-size: 18px; font-weight: 600; }
+    header nav { display: flex; gap: 12px; margin-left: auto; }
+    header nav a { color: var(--accent); text-decoration: none; font-size: 14px; }
+    header nav a:hover { text-decoration: underline; }
+    .container { display: grid; grid-template-columns: 280px 1fr; height: calc(100vh - 53px); }
+    .sidebar { background: var(--surface); border-right: 1px solid var(--border);
+      padding: 16px; overflow-y: auto; }
+    .main { display: flex; flex-direction: column; overflow: hidden; }
+    .controls { padding: 12px 16px; display: flex; gap: 12px; align-items: center;
+      border-bottom: 1px solid var(--border); background: var(--surface); }
+    .btn { padding: 6px 16px; border: 1px solid var(--border); border-radius: 6px;
+      font-size: 13px; cursor: pointer; font-weight: 500; }
+    .btn-connect { background: #238636; border-color: #2ea043; color: #fff; }
+    .btn-connect:hover { background: #2ea043; }
+    .btn-disconnect { background: #da3633; border-color: #f85149; color: #fff; }
+    .btn-disconnect:hover { background: #f85149; }
+    .btn-clear { background: var(--surface); color: var(--text-dim); }
+    .btn-clear:hover { color: var(--text); }
+    .status { font-size: 13px; color: var(--text-dim); display: flex; align-items: center; gap: 6px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
+    .status-dot.connected { background: var(--green); }
+    .status-dot.error { background: var(--red); }
+    .tag-group { margin-bottom: 12px; }
+    .group-header { font-size: 12px; font-weight: 600; text-transform: uppercase;
+      color: var(--text-dim); margin-bottom: 4px; letter-spacing: 0.5px; }
+    .group-header label { cursor: pointer; display: flex; align-items: center; gap: 6px; }
+    .tag-label { display: block; font-size: 13px; padding: 2px 0 2px 18px;
+      cursor: pointer; color: var(--text); }
+    .tag-label input { margin-right: 6px; }
+    .unit { color: var(--text-dim); font-size: 12px; }
+    .select-actions { margin-bottom: 12px; display: flex; gap: 8px; }
+    .select-actions button { background: none; border: none; color: var(--accent);
+      font-size: 12px; cursor: pointer; padding: 0; }
+    .select-actions button:hover { text-decoration: underline; }
+    .content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); }
+    .tab { padding: 8px 16px; font-size: 13px; cursor: pointer; color: var(--text-dim);
+      border-bottom: 2px solid transparent; }
+    .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+    .tab-panel { flex: 1; overflow: hidden; display: none; }
+    .tab-panel.active { display: flex; flex-direction: column; }
+    /* Live values table */
+    .values-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .values-table th { text-align: left; padding: 8px 12px; color: var(--text-dim);
+      font-weight: 500; border-bottom: 1px solid var(--border); position: sticky; top: 0;
+      background: var(--bg); }
+    .values-table td { padding: 6px 12px; border-bottom: 1px solid var(--border);
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace; font-size: 13px; }
+    .values-table tr.flash { animation: flash 0.4s ease-out; }
+    @keyframes flash { 0% { background: rgba(88,166,255,0.15); } 100% { background: transparent; } }
+    .table-wrap { flex: 1; overflow-y: auto; }
+    /* Message log */
+    .log { flex: 1; overflow-y: auto; padding: 8px 12px;
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 12px; line-height: 1.6; }
+    .log-entry { border-bottom: 1px solid var(--border); padding: 4px 0; }
+    .log-ts { color: var(--text-dim); margin-right: 8px; }
+    .log-tag { color: var(--accent); }
+    .log-val { color: var(--green); }
+    .log-sys { color: var(--yellow); font-style: italic; }
+    .msg-count { font-size: 12px; color: var(--text-dim); padding: 4px 12px;
+      border-top: 1px solid var(--border); background: var(--surface); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>WebSocket Stream Test</h1>
+    <nav>
+      <a href="/docs">API Explorer</a>
+      <a href="/admin/status">Status</a>
+    </nav>
+  </header>
+  <div class="container">
+    <div class="sidebar">
+      <div class="select-actions">
+        <button onclick="toggleAll(true)">Select All</button>
+        <button onclick="toggleAll(false)">Deselect All</button>
+      </div>
+${groupCheckboxes}
+    </div>
+    <div class="main">
+      <div class="controls">
+        <button id="connectBtn" class="btn btn-connect" onclick="toggleConnection()">Connect</button>
+        <button class="btn btn-clear" onclick="clearLog()">Clear Log</button>
+        <div class="status">
+          <span id="statusDot" class="status-dot"></span>
+          <span id="statusText">Disconnected</span>
+        </div>
+        <div class="status" style="margin-left: auto;">
+          <span id="msgRate">0 msg/s</span>
+        </div>
+      </div>
+      <div class="content">
+        <div class="tabs">
+          <div class="tab active" onclick="switchTab('values')">Live Values</div>
+          <div class="tab" onclick="switchTab('log')">Message Log</div>
+        </div>
+        <div id="tab-values" class="tab-panel active">
+          <div class="table-wrap">
+            <table class="values-table">
+              <thead><tr><th>Tag</th><th>Value</th><th>Unit</th><th>Timestamp</th><th>Quality</th></tr></thead>
+              <tbody id="valuesBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div id="tab-log" class="tab-panel">
+          <div id="logPane" class="log"></div>
+          <div id="msgCount" class="msg-count">0 messages</div>
+        </div>
+      </div>
+    </div>
+  </div>
+<script>
+const PORT = ${port};
+const TAGS = ${tagsJson};
+let ws = null;
+let msgTotal = 0;
+let msgWindow = [];
+
+// Group toggles
+document.querySelectorAll('.group-toggle').forEach(toggle => {
+  toggle.addEventListener('change', e => {
+    const group = e.target.closest('.tag-group');
+    group.querySelectorAll('.tag-label input').forEach(cb => { cb.checked = e.target.checked; });
+  });
+});
+
+function toggleAll(state) {
+  document.querySelectorAll('.sidebar input[type=checkbox]').forEach(cb => { cb.checked = state; });
+}
+
+function getSelectedWebIds() {
+  return [...document.querySelectorAll('.tag-label input:checked')].map(cb => cb.value);
+}
+
+function setStatus(state, text) {
+  const dot = document.getElementById('statusDot');
+  const txt = document.getElementById('statusText');
+  dot.className = 'status-dot' + (state ? ' ' + state : '');
+  txt.textContent = text;
+}
+
+function toggleConnection() {
+  if (ws && ws.readyState <= 1) { disconnect(); return; }
+  connect();
+}
+
+function connect() {
+  const webIds = getSelectedWebIds();
+  if (webIds.length === 0) { alert('Select at least one tag.'); return; }
+
+  const params = webIds.map(id => 'webId=' + encodeURIComponent(id)).join('&');
+  const url = 'wss://localhost:' + PORT + '/piwebapi/streamsets/channel?' + params + '&includeInitialValues=true';
+
+  setStatus('', 'Connecting...');
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    setStatus('connected', 'Connected (' + webIds.length + ' tags)');
+    addLogSys('Connected to ' + url);
+    document.getElementById('connectBtn').textContent = 'Disconnect';
+    document.getElementById('connectBtn').className = 'btn btn-disconnect';
+  };
+
+  ws.onmessage = (evt) => {
+    const now = Date.now();
+    msgTotal++;
+    msgWindow.push(now);
+    try {
+      const msg = JSON.parse(evt.data);
+      if (msg.Items) {
+        for (const stream of msg.Items) {
+          const tagName = stream.Name;
+          const sv = stream.Items && stream.Items[0];
+          if (!sv) continue;
+          updateValue(tagName, sv, stream.WebId);
+          addLogValue(tagName, sv);
+        }
+      }
+    } catch (e) {
+      addLogSys('Parse error: ' + e.message);
+    }
+    document.getElementById('msgCount').textContent = msgTotal + ' messages';
+  };
+
+  ws.onclose = (e) => {
+    setStatus('', 'Disconnected (code ' + e.code + ')');
+    addLogSys('Connection closed: code=' + e.code + ' reason=' + (e.reason || 'none'));
+    document.getElementById('connectBtn').textContent = 'Connect';
+    document.getElementById('connectBtn').className = 'btn btn-connect';
+    ws = null;
+  };
+
+  ws.onerror = () => {
+    setStatus('error', 'Connection error');
+    addLogSys('WebSocket error');
+  };
+}
+
+function disconnect() {
+  if (ws) ws.close();
+}
+
+// Live values table
+const valueRows = new Map();
+function updateValue(tagName, sv, webId) {
+  let row = valueRows.get(tagName);
+  if (!row) {
+    const tbody = document.getElementById('valuesBody');
+    row = document.createElement('tr');
+    row.innerHTML = '<td>' + tagName + '</td><td class="val"></td><td class="unit-cell"></td><td class="ts"></td><td class="q"></td>';
+    const meta = TAGS.find(t => t.tagName === tagName);
+    row.querySelector('.unit-cell').textContent = meta ? meta.unit : '';
+    tbody.appendChild(row);
+    valueRows.set(tagName, row);
+  }
+  const val = typeof sv.Value === 'number' ? sv.Value.toFixed(2) : String(sv.Value);
+  row.querySelector('.val').textContent = val;
+  row.querySelector('.ts').textContent = new Date(sv.Timestamp).toLocaleTimeString();
+  row.querySelector('.q').textContent = sv.Good ? 'Good' : 'Bad';
+  row.querySelector('.q').style.color = sv.Good ? 'var(--green)' : 'var(--red)';
+  row.classList.remove('flash');
+  void row.offsetWidth; // trigger reflow
+  row.classList.add('flash');
+}
+
+// Message log
+const logPane = document.getElementById('logPane');
+const MAX_LOG = 500;
+let logCount = 0;
+function addLogValue(tagName, sv) {
+  const val = typeof sv.Value === 'number' ? sv.Value.toFixed(2) : String(sv.Value);
+  const ts = new Date(sv.Timestamp).toLocaleTimeString();
+  appendLog('<span class="log-ts">' + ts + '</span><span class="log-tag">' + tagName + '</span> = <span class="log-val">' + val + '</span>');
+}
+function addLogSys(text) {
+  const ts = new Date().toLocaleTimeString();
+  appendLog('<span class="log-ts">' + ts + '</span><span class="log-sys">' + text + '</span>');
+}
+function appendLog(html) {
+  const el = document.createElement('div');
+  el.className = 'log-entry';
+  el.innerHTML = html;
+  logPane.appendChild(el);
+  logCount++;
+  while (logCount > MAX_LOG) { logPane.removeChild(logPane.firstChild); logCount--; }
+  logPane.scrollTop = logPane.scrollHeight;
+}
+function clearLog() {
+  logPane.innerHTML = '';
+  logCount = 0;
+  msgTotal = 0;
+  document.getElementById('msgCount').textContent = '0 messages';
+}
+
+// Tabs
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector('.tab-panel#tab-' + name).classList.add('active');
+  document.querySelectorAll('.tab').forEach(t => {
+    if (t.textContent.toLowerCase().includes(name === 'values' ? 'live' : 'log')) t.classList.add('active');
+  });
+}
+
+// Message rate counter
+setInterval(() => {
+  const now = Date.now();
+  msgWindow = msgWindow.filter(t => now - t < 1000);
+  document.getElementById('msgRate').textContent = msgWindow.length + ' msg/s';
+}, 500);
+</script>
+</body>
+</html>`;
 }
 
 /**
