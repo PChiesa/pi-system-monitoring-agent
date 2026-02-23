@@ -42,7 +42,7 @@ export function createRestHandler(
         'Upgrade': 'websocket',
       });
       res.end(JSON.stringify({
-        Message: 'This endpoint requires a WebSocket connection. Use wss:// protocol with a WebSocket client.',
+        Message: 'This endpoint requires a WebSocket connection. Use wss:// protocol with a WebSocket client, or open /ws-test in your browser for an interactive test UI.',
       }));
       return true;
     }
