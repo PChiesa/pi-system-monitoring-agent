@@ -146,6 +146,7 @@ export function getOpenApiSpec(ctx: OpenApiContext): object {
                         Descriptor: `Simulated ${exampleTag.tagName}`,
                         PointType: 'Float32',
                         EngineeringUnits: exampleTag.unit,
+                        Links: { Self: `https://localhost:${port}/piwebapi/points/${exampleTag.webId}` },
                       }
                     : undefined,
                 },
@@ -161,6 +162,45 @@ export function getOpenApiSpec(ctx: OpenApiContext): object {
             },
             '404': {
               description: 'PI Point not found for the given path',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/ErrorResponse' },
+                },
+              },
+            },
+          },
+        },
+      },
+
+      '/piwebapi/points/{webId}': {
+        get: {
+          tags: ['PI Web API'],
+          summary: 'Get a PI Point by WebId',
+          description:
+            'Look up a PI Point (tag) directly by its WebId. Returns the same metadata as the path-based lookup. ' +
+            'Compatible with the OSIsoft PI Web API GET /points/{webId} endpoint.',
+          operationId: 'getPointById',
+          parameters: [
+            {
+              name: 'webId',
+              in: 'path',
+              required: true,
+              description: 'The WebId of the PI Point.',
+              schema: { type: 'string' },
+              example: exampleWebId,
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'PI Point metadata',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/PIPoint' },
+                },
+              },
+            },
+            '404': {
+              description: 'PI Point not found for the given WebId',
               content: {
                 'application/json': {
                   schema: { $ref: '#/components/schemas/ErrorResponse' },
@@ -246,8 +286,8 @@ export function getOpenApiSpec(ctx: OpenApiContext): object {
               name: 'maxCount',
               in: 'query',
               required: false,
-              description: 'Maximum number of values to return (default: 100).',
-              schema: { type: 'integer', default: 100, minimum: 1 },
+              description: 'Maximum number of values to return (default: 1000).',
+              schema: { type: 'integer', default: 1000, minimum: 1 },
             },
           ],
           responses: {
@@ -255,15 +295,7 @@ export function getOpenApiSpec(ctx: OpenApiContext): object {
               description: 'Recorded values',
               content: {
                 'application/json': {
-                  schema: {
-                    type: 'object',
-                    properties: {
-                      Items: {
-                        type: 'array',
-                        items: { $ref: '#/components/schemas/PIStreamValue' },
-                      },
-                    },
-                  },
+                  schema: { $ref: '#/components/schemas/TimedValuesResponse' },
                 },
               },
             },
@@ -279,19 +311,286 @@ export function getOpenApiSpec(ctx: OpenApiContext): object {
         },
       },
 
+      '/piwebapi/streams/{webId}/end': {
+        get: {
+          tags: ['PI Web API'],
+          summary: 'Get end-of-stream value',
+          description:
+            'Returns the end-of-stream value (latest recorded value) for the specified stream. ' +
+            'In the simulator, this returns the same as `/value`. ' +
+            'Compatible with the OSIsoft PI Web API GET /streams/{webId}/end endpoint.',
+          operationId: 'getStreamEnd',
+          parameters: [
+            {
+              name: 'webId',
+              in: 'path',
+              required: true,
+              description: 'The WebId of the stream.',
+              schema: { type: 'string' },
+              example: exampleWebId,
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'End-of-stream value',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/PIStreamValue' },
+                },
+              },
+            },
+            '404': {
+              description: 'Stream not found for the given WebId',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/ErrorResponse' },
+                },
+              },
+            },
+          },
+        },
+      },
+
+      '/piwebapi/streams/{webId}/interpolated': {
+        get: {
+          tags: ['PI Web API'],
+          summary: 'Get interpolated values',
+          description:
+            'Returns interpolated values over a time range at a specified interval. ' +
+            'Uses linear interpolation between recorded values. ' +
+            'Compatible with the OSIsoft PI Web API GET /streams/{webId}/interpolated endpoint.',
+          operationId: 'getStreamInterpolated',
+          parameters: [
+            {
+              name: 'webId',
+              in: 'path',
+              required: true,
+              description: 'The WebId of the stream.',
+              schema: { type: 'string' },
+              example: exampleWebId,
+            },
+            {
+              name: 'startTime',
+              in: 'query',
+              required: false,
+              description: 'Start time in PI time syntax or ISO 8601 (default: `*-1d`).',
+              schema: { type: 'string', default: '*-1d' },
+            },
+            {
+              name: 'endTime',
+              in: 'query',
+              required: false,
+              description: 'End time in PI time syntax or ISO 8601 (default: `*`).',
+              schema: { type: 'string', default: '*' },
+            },
+            {
+              name: 'interval',
+              in: 'query',
+              required: false,
+              description: 'Interpolation interval in PI time syntax (default: `1h`). Examples: `5m`, `30s`, `1h`.',
+              schema: { type: 'string', default: '1h' },
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'Interpolated values',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/TimedValuesResponse' },
+                },
+              },
+            },
+            '404': {
+              description: 'Stream not found for the given WebId',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/ErrorResponse' },
+                },
+              },
+            },
+          },
+        },
+      },
+
+      '/piwebapi/streams/{webId}/plot': {
+        get: {
+          tags: ['PI Web API'],
+          summary: 'Get plot values',
+          description:
+            'Returns values suitable for plotting — significant values (first, last, min, max) per sub-interval. ' +
+            'Compatible with the OSIsoft PI Web API GET /streams/{webId}/plot endpoint.',
+          operationId: 'getStreamPlot',
+          parameters: [
+            {
+              name: 'webId',
+              in: 'path',
+              required: true,
+              description: 'The WebId of the stream.',
+              schema: { type: 'string' },
+              example: exampleWebId,
+            },
+            {
+              name: 'startTime',
+              in: 'query',
+              required: false,
+              description: 'Start time in PI time syntax or ISO 8601 (default: `*-1d`).',
+              schema: { type: 'string', default: '*-1d' },
+            },
+            {
+              name: 'endTime',
+              in: 'query',
+              required: false,
+              description: 'End time in PI time syntax or ISO 8601 (default: `*`).',
+              schema: { type: 'string', default: '*' },
+            },
+            {
+              name: 'intervals',
+              in: 'query',
+              required: false,
+              description: 'Number of plot intervals (default: 24).',
+              schema: { type: 'integer', default: 24, minimum: 1 },
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'Plot values',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/TimedValuesResponse' },
+                },
+              },
+            },
+            '404': {
+              description: 'Stream not found for the given WebId',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/ErrorResponse' },
+                },
+              },
+            },
+          },
+        },
+      },
+
+      '/piwebapi/streamsets/value': {
+        get: {
+          tags: ['PI Web API'],
+          summary: 'Get current values for multiple streams',
+          description:
+            'Returns the current value for each of the specified streams. ' +
+            'Pass multiple `webId` query parameters to subscribe to multiple tags. ' +
+            'Compatible with the OSIsoft PI Web API GET /streamsets/value endpoint.',
+          operationId: 'getStreamSetsValue',
+          parameters: [
+            {
+              name: 'webId',
+              in: 'query',
+              required: true,
+              description: 'One or more WebIds. Repeat the parameter for multiple tags.',
+              schema: { type: 'array', items: { type: 'string' } },
+              style: 'form',
+              explode: true,
+              example: exampleWebId,
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'Current values for multiple streams',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/StreamSetResponse' },
+                },
+              },
+            },
+            '400': {
+              description: 'Missing required `webId` parameter',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/ErrorResponse' },
+                },
+              },
+            },
+          },
+        },
+      },
+
+      '/piwebapi/streamsets/recorded': {
+        get: {
+          tags: ['PI Web API'],
+          summary: 'Get recorded values for multiple streams',
+          description:
+            'Returns historical recorded values for each of the specified streams within a time range. ' +
+            'Pass multiple `webId` query parameters. ' +
+            'Compatible with the OSIsoft PI Web API GET /streamsets/recorded endpoint.',
+          operationId: 'getStreamSetsRecorded',
+          parameters: [
+            {
+              name: 'webId',
+              in: 'query',
+              required: true,
+              description: 'One or more WebIds. Repeat the parameter for multiple tags.',
+              schema: { type: 'array', items: { type: 'string' } },
+              style: 'form',
+              explode: true,
+              example: exampleWebId,
+            },
+            {
+              name: 'startTime',
+              in: 'query',
+              required: false,
+              description: 'Start time in PI time syntax or ISO 8601 (default: `*-1h`).',
+              schema: { type: 'string', default: '*-1h' },
+            },
+            {
+              name: 'endTime',
+              in: 'query',
+              required: false,
+              description: 'End time in PI time syntax or ISO 8601 (default: `*`).',
+              schema: { type: 'string', default: '*' },
+            },
+            {
+              name: 'maxCount',
+              in: 'query',
+              required: false,
+              description: 'Maximum number of values to return per stream (default: 1000).',
+              schema: { type: 'integer', default: 1000, minimum: 1 },
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'Recorded values for multiple streams',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/StreamSetResponse' },
+                },
+              },
+            },
+            '400': {
+              description: 'Missing required `webId` parameter',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/ErrorResponse' },
+                },
+              },
+            },
+          },
+        },
+      },
+
       // ── WebSocket endpoint (documented for reference) ────────────
 
       '/piwebapi/streamsets/channel': {
         get: {
           tags: ['PI Web API'],
-          summary: 'WebSocket streaming channel',
+          summary: 'WebSocket streaming channel (ad-hoc)',
           description:
             'Upgrade to a WebSocket connection to receive real-time sensor data at 1 Hz. ' +
             'Subscribe to specific tags by passing one or more `webId` query parameters. ' +
             'This endpoint requires a WebSocket upgrade (`Connection: Upgrade`) — it cannot be called as a regular HTTP request.\n\n' +
             '**Protocol:** `wss://`\n\n' +
             '**Message format:** Each message is a JSON object with an `Items` array, where each item contains ' +
-            '`WebId`, `Name`, `Path`, and an `Items` array with the latest `PIStreamValue`.\n\n' +
+            '`WebId`, `Name`, `Path`, `UnitsAbbreviation`, `Links`, and an `Items` array with the latest `PIStreamValue`. ' +
+            'A top-level `Links` object is also included.\n\n' +
             `**Interactive test page:** [Open WebSocket Test UI](https://localhost:${port}/ws-test) to connect and view live streaming data in your browser.`,
           operationId: 'streamChannel',
           parameters: [
@@ -303,6 +602,50 @@ export function getOpenApiSpec(ctx: OpenApiContext): object {
               schema: { type: 'array', items: { type: 'string' } },
               style: 'form',
               explode: true,
+              example: exampleWebId,
+            },
+            {
+              name: 'includeInitialValues',
+              in: 'query',
+              required: false,
+              description: 'Whether to send a snapshot of current values immediately on connection (default: true).',
+              schema: { type: 'boolean', default: true },
+            },
+            {
+              name: 'heartbeatRate',
+              in: 'query',
+              required: false,
+              description: 'Interval in seconds between WebSocket ping frames (default: 5).',
+              schema: { type: 'integer', default: 5, minimum: 1 },
+            },
+          ],
+          responses: {
+            '101': {
+              description: 'Switching Protocols — WebSocket connection established',
+            },
+          },
+        },
+      },
+
+      '/piwebapi/streamsets/{webId}/channel': {
+        get: {
+          tags: ['PI Web API'],
+          summary: 'WebSocket streaming channel (path-based)',
+          description:
+            'Upgrade to a WebSocket connection to receive real-time sensor data at 1 Hz for a specific element. ' +
+            'If the `{webId}` matches a known stream, only that stream is subscribed. ' +
+            'Otherwise, all tags are subscribed (element-level behavior). ' +
+            'This endpoint requires a WebSocket upgrade (`Connection: Upgrade`).\n\n' +
+            '**Protocol:** `wss://`\n\n' +
+            '**Message format:** Same as the ad-hoc `/streamsets/channel` endpoint.',
+          operationId: 'streamChannelByWebId',
+          parameters: [
+            {
+              name: 'webId',
+              in: 'path',
+              required: true,
+              description: 'The WebId of the element or stream to subscribe to.',
+              schema: { type: 'string' },
               example: exampleWebId,
             },
             {
@@ -492,6 +835,7 @@ export function getOpenApiSpec(ctx: OpenApiContext): object {
             Descriptor: { type: 'string', description: 'Human-readable description.' },
             PointType: { type: 'string', example: 'Float32' },
             EngineeringUnits: { type: 'string', description: 'Unit of measurement (e.g. PSI, GPM, V).', example: exampleTag?.unit ?? 'PSI' },
+            Links: { $ref: '#/components/schemas/SelfLinks' },
           },
         },
 
@@ -505,6 +849,55 @@ export function getOpenApiSpec(ctx: OpenApiContext): object {
             Questionable: { type: 'boolean', example: false },
             Substituted: { type: 'boolean', example: false },
             Annotated: { type: 'boolean', example: false },
+            Links: { $ref: '#/components/schemas/SelfLinks', description: 'Present on value/end/recorded/interpolated/plot responses.' },
+          },
+        },
+
+        SelfLinks: {
+          type: 'object',
+          description: 'Standard PI Web API Links object with a Self URL.',
+          properties: {
+            Self: { type: 'string', format: 'uri', description: 'URL of this resource.' },
+          },
+        },
+
+        TimedValuesResponse: {
+          type: 'object',
+          description: 'A collection of timed values with self-link.',
+          properties: {
+            Items: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/PIStreamValue' },
+            },
+            Links: { $ref: '#/components/schemas/SelfLinks' },
+          },
+        },
+
+        StreamSetItem: {
+          type: 'object',
+          description: 'A single stream within a streamset response.',
+          properties: {
+            WebId: { type: 'string', description: 'WebId of the stream.' },
+            Name: { type: 'string', description: 'Tag name.' },
+            Path: { type: 'string', description: 'Full path.' },
+            Items: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/PIStreamValue' },
+            },
+            UnitsAbbreviation: { type: 'string', description: 'Unit of measurement.' },
+            Links: { $ref: '#/components/schemas/SelfLinks' },
+          },
+        },
+
+        StreamSetResponse: {
+          type: 'object',
+          description: 'A collection of streams, each with their own values.',
+          properties: {
+            Items: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/StreamSetItem' },
+            },
+            Links: { type: 'object', description: 'Top-level links (empty object for streamsets).' },
           },
         },
 
@@ -548,7 +941,7 @@ export function getOpenApiSpec(ctx: OpenApiContext): object {
                 type: 'object',
                 description:
                   'Reference of all registered PI tags. Each property key is a tag name, and its value is the corresponding WebId. ' +
-                  'Use WebIds with the `/piwebapi/streams/{webId}/value` and `/piwebapi/streams/{webId}/recorded` endpoints.',
+                  'Use WebIds with the `/piwebapi/streams/{webId}/value`, `/piwebapi/streams/{webId}/recorded`, `/piwebapi/streams/{webId}/end`, `/piwebapi/streams/{webId}/interpolated`, and `/piwebapi/streams/{webId}/plot` endpoints.',
                 properties: Object.fromEntries(
                   allTags.map((t) => [
                     t.tagName,
