@@ -1,0 +1,18 @@
+{
+  "name": "pi-simulator",
+  "version": "1.0.0",
+  "description": "PI Web API simulator for BOP monitoring agent development",
+  "type": "module",
+  "scripts": {
+    "start": "bun run index.ts",
+    "dev": "bun run --watch index.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.6.0"
+  }
+}
