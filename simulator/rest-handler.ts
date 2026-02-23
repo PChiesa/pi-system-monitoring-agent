@@ -35,6 +35,18 @@ export function createRestHandler(
       return true;
     }
 
+    // GET /piwebapi/streamsets/channel — WebSocket-only endpoint
+    if (path === '/piwebapi/streamsets/channel' && req.method === 'GET') {
+      res.writeHead(426, {
+        'Content-Type': 'application/json',
+        'Upgrade': 'websocket',
+      });
+      res.end(JSON.stringify({
+        Message: 'This endpoint requires a WebSocket connection. Use wss:// protocol with a WebSocket client.',
+      }));
+      return true;
+    }
+
     return false;
   };
 }
