@@ -2,3 +2,21 @@ node_modules/
 dist/
 Dockerfile
 .dockerignore
+
+# UI — only the pre-built dist/ is needed at runtime
+ui/node_modules/
+ui/src/
+ui/public/
+ui/.gitignore
+ui/README.md
+ui/eslint.config.js
+ui/components.json
+ui/tsconfig*.json
+ui/vite.config.ts
+ui/index.html
+ui/package.json
+ui/bun.lock
+
+# Not used by bun
+package-lock.json
+tsconfig.json

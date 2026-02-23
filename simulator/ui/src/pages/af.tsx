@@ -16,31 +16,31 @@ import { Badge } from '@/components/ui/badge';
 interface TreeNode {
   element: AFElementResp;
   children: TreeNode[];
-  loaded: boolean;
 }
 
-function TreeItem({ node, depth, selected, onSelect, onToggle }: {
-  node: TreeNode; depth: number; selected: string | null;
+function TreeItem({ node, depth, selected, collapsed, onSelect, onToggle }: {
+  node: TreeNode; depth: number; selected: string | null; collapsed: Set<string>;
   onSelect: (webId: string) => void; onToggle: (webId: string) => void;
 }) {
   const isSelected = selected === node.element.WebId;
+  const isCollapsed = collapsed.has(node.element.WebId);
   return (
     <div>
       <button
-        onClick={() => { onSelect(node.element.WebId); if (node.element.HasChildren && !node.loaded) onToggle(node.element.WebId); }}
+        onClick={() => onSelect(node.element.WebId)}
         className={`w-full text-left px-2 py-1.5 text-sm rounded hover:bg-accent/50 flex items-center gap-1 ${isSelected ? 'bg-accent text-accent-foreground' : ''}`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
       >
         {node.element.HasChildren && (
           <span className="text-xs" onClick={e => { e.stopPropagation(); onToggle(node.element.WebId); }}>
-            {node.children.length > 0 ? '▾' : '▸'}
+            {isCollapsed ? '▸' : '▾'}
           </span>
         )}
         <span>{node.element.Name}</span>
       </button>
-      {node.children.map(child => (
+      {!isCollapsed && node.children.map(child => (
         <TreeItem key={child.element.WebId} node={child} depth={depth + 1}
-          selected={selected} onSelect={onSelect} onToggle={onToggle} />
+          selected={selected} collapsed={collapsed} onSelect={onSelect} onToggle={onToggle} />
       ))}
     </div>
   );
@@ -51,6 +51,7 @@ export function AFPage() {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [selectedDb, setSelectedDb] = useState<string>('');
   const [selectedElement, setSelectedElement] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [attributes, setAttributes] = useState<AFAttributeResp[]>([]);
   const [elementDetail, setElementDetail] = useState<AFElementResp | null>(null);
   const [showCreateElement, setShowCreateElement] = useState(false);
@@ -80,33 +81,28 @@ export function AFPage() {
   }, []);
 
   const loadTree = useCallback(async (dbWebId: string) => {
+    async function loadRecursive(elements: AFElementResp[]): Promise<TreeNode[]> {
+      return Promise.all(elements.map(async (el): Promise<TreeNode> => {
+        if (!el.HasChildren) return { element: el, children: [] };
+        const { Items } = await api.getAFChildElements(el.WebId);
+        return { element: el, children: await loadRecursive(Items) };
+      }));
+    }
     const { Items } = await api.getAFRootElements(dbWebId);
-    setTree(Items.map(el => ({ element: el, children: [], loaded: false })));
+    setTree(await loadRecursive(Items));
   }, []);
 
   useEffect(() => {
     if (selectedDb) loadTree(selectedDb);
   }, [selectedDb, loadTree]);
 
-  const toggleNode = useCallback(async (webId: string) => {
-    const toggle = async (nodes: TreeNode[]): Promise<TreeNode[]> => {
-      const result: TreeNode[] = [];
-      for (const node of nodes) {
-        if (node.element.WebId === webId) {
-          if (!node.loaded) {
-            const { Items } = await api.getAFChildElements(webId);
-            result.push({ ...node, children: Items.map(el => ({ element: el, children: [], loaded: false })), loaded: true });
-          } else {
-            result.push({ ...node, children: node.children.length > 0 ? [] : node.children, loaded: node.children.length > 0 ? false : node.loaded });
-          }
-        } else {
-          result.push({ ...node, children: await toggle(node.children) });
-        }
-      }
-      return result;
-    };
-    setTree(await toggle(tree));
-  }, [tree]);
+  const toggleNode = useCallback((webId: string) => {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      if (next.has(webId)) next.delete(webId); else next.add(webId);
+      return next;
+    });
+  }, []);
 
   const selectElement = useCallback(async (webId: string) => {
     setSelectedElement(webId);
@@ -168,7 +164,7 @@ export function AFPage() {
             <ScrollArea className="h-full px-2">
               {tree.map(node => (
                 <TreeItem key={node.element.WebId} node={node} depth={0}
-                  selected={selectedElement} onSelect={selectElement} onToggle={toggleNode} />
+                  selected={selectedElement} collapsed={collapsed} onSelect={selectElement} onToggle={toggleNode} />
               ))}
             </ScrollArea>
           </CardContent>

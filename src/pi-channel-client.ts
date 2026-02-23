@@ -37,6 +37,7 @@ export class PIChannelClient extends EventEmitter {
   private maxReconnectDelay = 30000;
   private reconnectAttempts = 0;
   private intentionallyClosed = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private url: string;
   private authHeader: string;
   private config: PIChannelConfig;
@@ -63,6 +64,15 @@ export class PIChannelClient extends EventEmitter {
 
   connect(): void {
     this.intentionallyClosed = false;
+
+    // Clean up any previous socket to prevent orphaned connections
+    if (this.ws) {
+      this.ws.removeAllListeners();
+      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+        this.ws.close();
+      }
+      this.ws = null;
+    }
 
     this.ws = new WebSocket(this.url, {
       headers: { Authorization: this.authHeader },
@@ -107,6 +117,9 @@ export class PIChannelClient extends EventEmitter {
   }
 
   private scheduleReconnect(): void {
+    // Prevent multiple concurrent reconnect timers
+    if (this.reconnectTimer) return;
+
     const maxAttempts = this.config.maxReconnectAttempts ?? 50;
     if (this.reconnectAttempts >= maxAttempts) {
       this.emit('maxReconnectReached');
@@ -121,7 +134,8 @@ export class PIChannelClient extends EventEmitter {
         ` (attempt ${this.reconnectAttempts + 1}/${maxAttempts})`
     );
 
-    setTimeout(() => {
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
       this.reconnectAttempts++;
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay);
       this.connect();
@@ -130,6 +144,10 @@ export class PIChannelClient extends EventEmitter {
 
   disconnect(): void {
     this.intentionallyClosed = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.ws?.close();
   }
 }

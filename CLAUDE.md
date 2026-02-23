@@ -93,10 +93,10 @@ PI_SERVER=localhost:8443 PI_DATA_ARCHIVE=SIMULATOR PI_USERNAME=sim PI_PASSWORD=s
 ### Simulator Configuration UI
 
 ```bash
-cd simulator/ui && npm install && npm run build   # Build UI (required once, or after UI changes)
+cd simulator/ui && bun install && bun run build   # Build UI (required once, or after UI changes)
 ```
 
-The built UI is served at `https://localhost:8443/ui/` by the simulator. During development, run the Vite dev server separately (`cd simulator/ui && npm run dev`) — it proxies API requests to the simulator.
+The built UI is served at `https://localhost:8443/ui/` by the simulator. During development, run the Vite dev server separately (`cd simulator/ui && bun run dev`) — it proxies API requests to the simulator.
 
 ### Testing
 

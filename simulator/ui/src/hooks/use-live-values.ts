@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 export interface LiveValue {
   Value: number | boolean | string; Timestamp: string; UnitsAbbreviation: string; Good: boolean;
@@ -7,46 +7,61 @@ export interface LiveValue {
 export function useLiveValues(webIds: string[]) {
   const [values, setValues] = useState<Map<string, LiveValue>>(new Map());
   const [connected, setConnected] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const connect = useCallback(() => {
-    if (webIds.length === 0) return;
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const params = webIds.map(id => `webId=${id}`).join('&');
-    const ws = new WebSocket(`${proto}//${location.host}/piwebapi/streamsets/channel?${params}`);
-
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => {
-      setConnected(false);
-      reconnectRef.current = setTimeout(connect, 3000);
-    };
-    ws.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data as string) as { Items?: { WebId: string; Items?: LiveValue[] }[] };
-        if (data.Items) {
-          setValues(prev => {
-            const next = new Map(prev);
-            for (const item of data.Items!) {
-              if (item.Items?.[0]) {
-                next.set(item.WebId, item.Items[0]);
-              }
-            }
-            return next;
-          });
-        }
-      } catch { /* ignore parse errors */ }
-    };
-    wsRef.current = ws;
-  }, [webIds]);
+  // Stabilise the webIds reference — only change when the actual IDs change
+  const webIdsKey = webIds.join(',');
+  const stableWebIds = useRef(webIds);
+  if (stableWebIds.current.join(',') !== webIdsKey) {
+    stableWebIds.current = webIds;
+  }
 
   useEffect(() => {
+    const ids = stableWebIds.current;
+    if (ids.length === 0) return;
+
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
+
+    function connect() {
+      if (disposed) return;
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const params = ids.map(id => `webId=${id}`).join('&');
+      ws = new WebSocket(`${proto}//${location.host}/piwebapi/streamsets/channel?${params}`);
+
+      ws.onopen = () => { if (!disposed) setConnected(true); };
+      ws.onclose = () => {
+        if (disposed) return;
+        setConnected(false);
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+      ws.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data as string) as { Items?: { WebId: string; Items?: LiveValue[] }[] };
+          if (data.Items) {
+            setValues(prev => {
+              const next = new Map(prev);
+              for (const item of data.Items!) {
+                if (item.Items?.[0]) {
+                  next.set(item.WebId, item.Items[0]);
+                }
+              }
+              return next;
+            });
+          }
+        } catch { /* ignore parse errors */ }
+      };
+    }
+
     connect();
+
     return () => {
-      clearTimeout(reconnectRef.current);
-      wsRef.current?.close();
+      disposed = true;
+      clearTimeout(reconnectTimer);
+      ws?.close();
     };
-  }, [connect]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [webIdsKey]);
 
   return { values, connected };
 }
