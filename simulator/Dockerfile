@@ -8,7 +8,7 @@ WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 
-COPY simulator/ simulator/
+COPY . .
 
 ENV SIM_PORT=8443
 
@@ -17,4 +17,4 @@ EXPOSE 8443
 HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
   CMD curl -fk https://localhost:${SIM_PORT}/admin/status || exit 1
 
-ENTRYPOINT ["bun", "run", "simulator/index.ts"]
+ENTRYPOINT ["bun", "run", "index.ts"]

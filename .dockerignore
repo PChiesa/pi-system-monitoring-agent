@@ -4,5 +4,6 @@ dist/
 .git/
 *.js.map
 tests/
+simulator/
 CLAUDE.md
 README.md

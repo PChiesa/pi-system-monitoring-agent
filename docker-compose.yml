@@ -24,9 +24,7 @@ services:
       retries: 3
 
   simulator:
-    build:
-      context: .
-      dockerfile: simulator/Dockerfile
+    build: simulator/
     container_name: pi-simulator
     restart: unless-stopped
     ports:
