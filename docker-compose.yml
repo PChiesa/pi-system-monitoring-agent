@@ -22,3 +22,21 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 3
+
+  simulator:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+    container_name: pi-simulator
+    restart: unless-stopped
+    ports:
+      - "${SIM_PORT:-8443}:8443"
+    environment:
+      - SIM_PORT=8443
+      - SIM_AUTO_INTERVAL_MS=${SIM_AUTO_INTERVAL_MS:-600000}
+    healthcheck:
+      test: ["CMD", "curl", "-fk", "https://localhost:8443/admin/status"]
+      interval: 10s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
