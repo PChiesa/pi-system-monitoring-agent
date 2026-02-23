@@ -2,6 +2,7 @@ import http from 'http';
 import { TagRegistry } from './tag-registry.js';
 import { DataGenerator, PIStreamValue } from './data-generator.js';
 import { parsePITime } from './pi-time.js';
+import { sendJson } from './utils.js';
 
 /** Parse a PI time interval string (e.g. "1h", "5m", "30s") to milliseconds. */
 function parseInterval(interval: string): number {
@@ -348,13 +349,13 @@ function linearInterpolate(history: PIStreamValue[], targetMs: number): number |
   if (before && after) {
     const t1 = new Date(before.Timestamp).getTime();
     const t2 = new Date(after.Timestamp).getTime();
-    if (t1 === t2) return before.Value;
+    if (t1 === t2) return before.Value as number;
     const ratio = (targetMs - t1) / (t2 - t1);
-    return before.Value + ratio * (after.Value - before.Value);
+    return (before.Value as number) + ratio * ((after.Value as number) - (before.Value as number));
   }
 
-  if (before) return before.Value;
-  if (after) return after.Value;
+  if (before) return before.Value as number;
+  if (after) return after.Value as number;
   return null;
 }
 
@@ -533,7 +534,3 @@ function handleGetStreamSetsRecorded(
   });
 }
 
-function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(body));
-}
