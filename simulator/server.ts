@@ -6,7 +6,7 @@ import { ScenarioEngine } from './scenario-engine.js';
 import { createRestHandler } from './rest-handler.js';
 import { WSHandler } from './ws-handler.js';
 import { generateSelfSignedCert } from './tls.js';
-import { getOpenApiSpec } from './openapi.js';
+import { getOpenApiSpec, getExplorerHtml } from './openapi.js';
 
 export interface SimulatorConfig {
   port: number;
@@ -67,6 +67,7 @@ export class SimulatorServer {
         console.log(`[PI Simulator] WebSocket:  wss://localhost:${this.config.port}/piwebapi/streamsets/channel`);
         console.log(`[PI Simulator] Admin:      https://localhost:${this.config.port}/admin/status`);
         console.log(`[PI Simulator] OpenAPI:    https://localhost:${this.config.port}/openapi.json`);
+        console.log(`[PI Simulator] Explorer:   https://localhost:${this.config.port}/docs`);
 
         // Start 1 Hz tick
         this.tickInterval = setInterval(() => {
@@ -113,7 +114,17 @@ export class SimulatorServer {
     const url = new URL(req.url!, `https://${req.headers.host || 'localhost'}`);
 
     if (url.pathname === '/openapi.json' && req.method === 'GET') {
-      sendJson(res, 200, getOpenApiSpec(this.config.port));
+      sendJson(res, 200, getOpenApiSpec({
+        port: this.config.port,
+        registry: this.registry,
+        scenarioEngine: this.scenarioEngine,
+      }));
+      return;
+    }
+
+    if ((url.pathname === '/docs' || url.pathname === '/docs/') && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(getExplorerHtml(this.config.port));
       return;
     }
 

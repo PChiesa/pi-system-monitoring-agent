@@ -1,17 +1,47 @@
+import { TagRegistry, TagMeta } from './tag-registry.js';
+import { ScenarioEngine } from './scenario-engine.js';
+
 /**
- * OpenAPI 3.0.3 specification for the PI Web API Simulator.
- *
- * Covers all REST endpoints (PI Web API compatible + admin) and documents
- * the WebSocket channel endpoint.
+ * Context passed to the spec builder so it can reflect live simulator state.
+ * All fields are optional — if omitted, sensible defaults are used.
  */
-export function getOpenApiSpec(port: number): object {
+export interface OpenApiContext {
+  port: number;
+  registry?: TagRegistry;
+  scenarioEngine?: ScenarioEngine;
+}
+
+/**
+ * Build an OpenAPI 3.0.3 specification for the PI Web API Simulator.
+ *
+ * When `registry` and `scenarioEngine` are provided the spec is populated
+ * with live data (real WebIds, tag list, scenario catalogue) so it stays
+ * in sync with the running server automatically.
+ */
+export function getOpenApiSpec(ctx: OpenApiContext): object {
+  const { port, registry, scenarioEngine } = ctx;
+
+  // ── Dynamic data from the running simulator ─────────────────────
+  const allTags: TagMeta[] = registry?.getAllMeta() ?? [];
+  const exampleTag = allTags[0];
+  const exampleWebId = exampleTag?.webId ?? 'SIM_Qk9QLkFDQy5QUkVTUy5TWVM';
+  const examplePath = exampleTag?.path ?? '\\\\SIMULATOR\\BOP.ACC.PRESS.SYS';
+  const exampleTagName = exampleTag?.tagName ?? 'BOP.ACC.PRESS.SYS';
+
+  const scenarios = scenarioEngine?.listScenarios() ?? [];
+  const scenarioNames = scenarios.map((s) => s.name);
+  const faultScenarioNames = scenarioNames.filter((n) => n !== 'normal');
+  const exampleScenario = faultScenarioNames[0] ?? 'kick-detection';
+
   return {
     openapi: '3.0.3',
     info: {
       title: 'PI Web API Simulator',
       description:
         'A local simulator for the OSIsoft PI Web API, providing BOP sensor data for development and testing. ' +
-        'Serves PI Web API-compatible REST endpoints, a WebSocket streaming channel, and admin control endpoints.',
+        'Serves PI Web API-compatible REST endpoints, a WebSocket streaming channel, and admin control endpoints.\n\n' +
+        `**Registered tags:** ${allTags.length || 25}\n\n` +
+        `**Available scenarios:** ${scenarioNames.length > 0 ? scenarioNames.join(', ') : 'normal, accumulator-decay, kick-detection, ram-slowdown, pod-failure'}`,
       version: '1.0.0',
     },
     servers: [
@@ -25,7 +55,7 @@ export function getOpenApiSpec(port: number): object {
         get: {
           tags: ['Meta'],
           summary: 'OpenAPI specification',
-          description: 'Returns this OpenAPI 3.0.3 specification as JSON.',
+          description: 'Returns this OpenAPI 3.0.3 specification as JSON. The spec is generated dynamically and always reflects the current simulator state (registered tags, available scenarios).',
           operationId: 'getOpenApiSpec',
           responses: {
             '200': {
@@ -33,6 +63,25 @@ export function getOpenApiSpec(port: number): object {
               content: {
                 'application/json': {
                   schema: { type: 'object' },
+                },
+              },
+            },
+          },
+        },
+      },
+
+      '/docs': {
+        get: {
+          tags: ['Meta'],
+          summary: 'Interactive API explorer',
+          description: 'Serves an interactive API documentation UI (Scalar API Reference) where you can browse endpoints and try out requests.',
+          operationId: 'getApiExplorer',
+          responses: {
+            '200': {
+              description: 'HTML page with the interactive API explorer',
+              content: {
+                'text/html': {
+                  schema: { type: 'string' },
                 },
               },
             },
@@ -56,9 +105,9 @@ export function getOpenApiSpec(port: number): object {
               in: 'query',
               required: true,
               description:
-                'Full PI Point path in the format `\\\\DataArchive\\TagName` (e.g. `\\\\SIMULATOR\\BOP.ACC.PRESS.SYS`).',
+                'Full PI Point path in the format `\\\\DataArchive\\TagName`.',
               schema: { type: 'string' },
-              example: '\\\\SIMULATOR\\BOP.ACC.PRESS.SYS',
+              example: examplePath,
             },
           ],
           responses: {
@@ -67,6 +116,16 @@ export function getOpenApiSpec(port: number): object {
               content: {
                 'application/json': {
                   schema: { $ref: '#/components/schemas/PIPoint' },
+                  example: exampleTag
+                    ? {
+                        WebId: exampleTag.webId,
+                        Name: exampleTag.tagName,
+                        Path: exampleTag.path,
+                        Descriptor: `Simulated ${exampleTag.tagName}`,
+                        PointType: 'Float32',
+                        EngineeringUnits: exampleTag.unit,
+                      }
+                    : undefined,
                 },
               },
             },
@@ -105,6 +164,7 @@ export function getOpenApiSpec(port: number): object {
               required: true,
               description: 'The WebId of the stream (obtained from GET /piwebapi/points).',
               schema: { type: 'string' },
+              example: exampleWebId,
             },
           ],
           responses: {
@@ -144,6 +204,7 @@ export function getOpenApiSpec(port: number): object {
               required: true,
               description: 'The WebId of the stream.',
               schema: { type: 'string' },
+              example: exampleWebId,
             },
             {
               name: 'startTime',
@@ -219,6 +280,7 @@ export function getOpenApiSpec(port: number): object {
               schema: { type: 'array', items: { type: 'string' } },
               style: 'form',
               explode: true,
+              example: exampleWebId,
             },
             {
               name: 'includeInitialValues',
@@ -284,6 +346,9 @@ export function getOpenApiSpec(port: number): object {
                       },
                     },
                   },
+                  ...(scenarios.length > 0
+                    ? { example: { scenarios } }
+                    : {}),
                 },
               },
             },
@@ -310,7 +375,10 @@ export function getOpenApiSpec(port: number): object {
                     name: {
                       type: 'string',
                       description: 'The scenario name to activate.',
-                      example: 'kick-detection',
+                      ...(faultScenarioNames.length > 0
+                        ? { enum: scenarioNames }
+                        : {}),
+                      example: exampleScenario,
                     },
                   },
                 },
@@ -326,7 +394,7 @@ export function getOpenApiSpec(port: number): object {
                     type: 'object',
                     properties: {
                       status: { type: 'string', example: 'ok' },
-                      scenario: { type: 'string', example: 'kick-detection' },
+                      scenario: { type: 'string', example: exampleScenario },
                     },
                   },
                 },
@@ -351,6 +419,9 @@ export function getOpenApiSpec(port: number): object {
                       available: {
                         type: 'array',
                         items: { type: 'string' },
+                        ...(scenarioNames.length > 0
+                          ? { example: scenarioNames }
+                          : {}),
                       },
                     },
                   },
@@ -392,12 +463,12 @@ export function getOpenApiSpec(port: number): object {
         PIPoint: {
           type: 'object',
           properties: {
-            WebId: { type: 'string', description: 'Unique identifier for the PI Point.' },
-            Name: { type: 'string', description: 'Tag name (e.g. `BOP.ACC.PRESS.SYS`).' },
-            Path: { type: 'string', description: 'Full path (e.g. `\\\\SIMULATOR\\BOP.ACC.PRESS.SYS`).' },
+            WebId: { type: 'string', description: 'Unique identifier for the PI Point.', example: exampleWebId },
+            Name: { type: 'string', description: 'Tag name.', example: exampleTagName },
+            Path: { type: 'string', description: 'Full path.', example: examplePath },
             Descriptor: { type: 'string', description: 'Human-readable description.' },
             PointType: { type: 'string', example: 'Float32' },
-            EngineeringUnits: { type: 'string', description: 'Unit of measurement (e.g. PSI, GPM, V).' },
+            EngineeringUnits: { type: 'string', description: 'Unit of measurement (e.g. PSI, GPM, V).', example: exampleTag?.unit ?? 'PSI' },
           },
         },
 
@@ -405,12 +476,12 @@ export function getOpenApiSpec(port: number): object {
           type: 'object',
           properties: {
             Timestamp: { type: 'string', format: 'date-time', description: 'ISO 8601 timestamp of the reading.' },
-            Value: { type: 'number', description: 'Sensor value.' },
+            Value: { type: 'number', description: 'Sensor value.', example: 3000.15 },
             UnitsAbbreviation: { type: 'string', description: 'Unit of measurement.' },
-            Good: { type: 'boolean', description: 'Whether the value is good quality.' },
-            Questionable: { type: 'boolean' },
-            Substituted: { type: 'boolean' },
-            Annotated: { type: 'boolean' },
+            Good: { type: 'boolean', description: 'Whether the value is good quality.', example: true },
+            Questionable: { type: 'boolean', example: false },
+            Substituted: { type: 'boolean', example: false },
+            Annotated: { type: 'boolean', example: false },
           },
         },
 
@@ -418,10 +489,10 @@ export function getOpenApiSpec(port: number): object {
           type: 'object',
           properties: {
             status: { type: 'string', example: 'running' },
-            uptime: { type: 'integer', description: 'Uptime in seconds.' },
-            tags: { type: 'integer', description: 'Number of registered tags.' },
-            wsClients: { type: 'integer', description: 'Number of active WebSocket clients.' },
-            activeScenario: { type: 'string', description: 'Name of the active scenario, or `normal`.' },
+            uptime: { type: 'integer', description: 'Uptime in seconds.', example: 120 },
+            tags: { type: 'integer', description: 'Number of registered tags.', example: allTags.length || 25 },
+            wsClients: { type: 'integer', description: 'Number of active WebSocket clients.', example: 0 },
+            activeScenario: { type: 'string', description: 'Name of the active scenario, or `normal`.', example: 'normal' },
             mode: { type: 'string', enum: ['auto', 'manual'], description: 'Scenario engine mode.' },
           },
         },
@@ -429,9 +500,9 @@ export function getOpenApiSpec(port: number): object {
         ScenarioInfo: {
           type: 'object',
           properties: {
-            name: { type: 'string', description: 'Scenario identifier.' },
+            name: { type: 'string', description: 'Scenario identifier.', example: exampleScenario },
             description: { type: 'string', description: 'Human-readable description.' },
-            durationMs: { type: 'integer', description: 'Scenario duration in milliseconds (0 = indefinite).' },
+            durationMs: { type: 'integer', description: 'Scenario duration in milliseconds (0 = indefinite).', example: 300000 },
           },
         },
 
@@ -446,6 +517,28 @@ export function getOpenApiSpec(port: number): object {
             },
           },
         },
+
+        // ── Tag reference (auto-generated from registry) ──────────
+        ...(allTags.length > 0
+          ? {
+              TagReference: {
+                type: 'object',
+                description:
+                  'Reference of all registered PI tags. Each property key is a tag name, and its value is the corresponding WebId. ' +
+                  'Use WebIds with the `/piwebapi/streams/{webId}/value` and `/piwebapi/streams/{webId}/recorded` endpoints.',
+                properties: Object.fromEntries(
+                  allTags.map((t) => [
+                    t.tagName,
+                    {
+                      type: 'string',
+                      description: `Unit: ${t.unit || 'dimensionless'} | Path: ${t.path}`,
+                      example: t.webId,
+                    },
+                  ])
+                ),
+              },
+            }
+          : {}),
       },
     },
 
@@ -455,4 +548,41 @@ export function getOpenApiSpec(port: number): object {
       { name: 'Meta', description: 'API metadata and documentation.' },
     ],
   };
+}
+
+/**
+ * Returns an HTML page that embeds the Scalar API Reference explorer.
+ *
+ * Scalar is loaded from the jsDelivr CDN — no npm dependencies needed.
+ * It provides an interactive "try it out" client with dark mode, code
+ * generation in 25+ languages, and environment variable support.
+ */
+export function getExplorerHtml(port: number): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PI Web API Simulator — API Explorer</title>
+  <style>
+    body { margin: 0; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+  <script>
+    Scalar.createApiReference('#app', {
+      url: 'https://localhost:${port}/openapi.json',
+      proxyUrl: '',
+      theme: 'kepler',
+      darkMode: true,
+      hideDownloadButton: false,
+      metaData: {
+        title: 'PI Web API Simulator',
+      },
+    })
+  </script>
+</body>
+</html>`;
 }
