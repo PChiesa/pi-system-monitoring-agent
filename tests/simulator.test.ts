@@ -6,7 +6,22 @@ import { parsePITime } from '../simulator/pi-time';
 import { TagRegistry } from '../simulator/tag-registry';
 import { DataGenerator } from '../simulator/data-generator';
 import { ScenarioEngine } from '../simulator/scenario-engine';
+import { createCustomScenario } from '../simulator/custom-scenario';
 import { createRestHandler } from '../simulator/rest-handler';
+
+/** Create a TagRegistry with defaults loaded. */
+function createRegistry(dataArchive = 'SIMULATOR'): TagRegistry {
+  const registry = new TagRegistry(dataArchive);
+  registry.loadFromDefaults();
+  return registry;
+}
+
+/** Create a DataGenerator with defaults loaded. */
+function createGenerator(registry: TagRegistry): DataGenerator {
+  const generator = new DataGenerator(registry);
+  generator.loadFromDefaults();
+  return generator;
+}
 
 /** Minimal mock for http.IncomingMessage. */
 function mockReq(method: string, url: string): any {
@@ -77,7 +92,7 @@ describe('TagRegistry', () => {
   let registry: TagRegistry;
 
   beforeEach(() => {
-    registry = new TagRegistry('SIMULATOR');
+    registry = createRegistry('SIMULATOR');
   });
 
   it('registers all 25 tags', () => {
@@ -86,7 +101,7 @@ describe('TagRegistry', () => {
 
   it('generates deterministic WebIds', () => {
     const meta1 = registry.getByTagName('BOP.ACC.PRESS.SYS');
-    const meta2 = new TagRegistry('SIMULATOR').getByTagName('BOP.ACC.PRESS.SYS');
+    const meta2 = createRegistry('SIMULATOR').getByTagName('BOP.ACC.PRESS.SYS');
     expect(meta1!.webId).toBe(meta2!.webId);
   });
 
@@ -128,8 +143,8 @@ describe('DataGenerator', () => {
   let generator: DataGenerator;
 
   beforeEach(() => {
-    registry = new TagRegistry();
-    generator = new DataGenerator(registry);
+    registry = createRegistry();
+    generator = createGenerator(registry);
   });
 
   it('generates values for all tags on tick', () => {
@@ -233,35 +248,44 @@ describe('ScenarioEngine', () => {
 
   beforeEach(() => {
     spyOn(console, 'log').mockImplementation((() => {}) as any);
-    registry = new TagRegistry();
-    generator = new DataGenerator(registry);
+    registry = createRegistry();
+    generator = createGenerator(registry);
     engine = new ScenarioEngine(generator, 'manual');
   });
 
-  it('lists all built-in scenarios', () => {
+  it('starts with no scenarios', () => {
     const list = engine.listScenarios();
-    const names = list.map((s) => s.name);
-    expect(names).toContain('normal');
-    expect(names).toContain('accumulator-decay');
-    expect(names).toContain('kick-detection');
-    expect(names).toContain('ram-slowdown');
-    expect(names).toContain('pod-failure');
+    expect(list.length).toBe(0);
   });
 
-  it('starts in normal state', () => {
-    expect(engine.getActiveScenarioName()).toBe('normal');
+  it('starts in idle state (none)', () => {
+    expect(engine.getActiveScenarioName()).toBe('none');
   });
 
-  it('activates a scenario', () => {
-    const ok = engine.activate('kick-detection');
+  it('registers and activates a custom scenario', () => {
+    const scenario = createCustomScenario({
+      name: 'test-scenario',
+      description: 'Test scenario',
+      durationMs: 60000,
+      modifiers: [{ tagName: 'BOP.ACC.PRESS.SYS', startValue: 3000, endValue: 1500, curveType: 'linear' }],
+    });
+    engine.register(scenario);
+    const ok = engine.activate('test-scenario');
     expect(ok).toBe(true);
-    expect(engine.getActiveScenarioName()).toBe('kick-detection');
+    expect(engine.getActiveScenarioName()).toBe('test-scenario');
   });
 
   it('deactivates a scenario', () => {
-    engine.activate('kick-detection');
+    const scenario = createCustomScenario({
+      name: 'test-scenario',
+      description: 'Test',
+      durationMs: 60000,
+      modifiers: [],
+    });
+    engine.register(scenario);
+    engine.activate('test-scenario');
     engine.deactivate();
-    expect(engine.getActiveScenarioName()).toBe('normal');
+    expect(engine.getActiveScenarioName()).toBe('none');
   });
 
   it('returns false for unknown scenario', () => {
@@ -269,16 +293,14 @@ describe('ScenarioEngine', () => {
     expect(ok).toBe(false);
   });
 
-  it('activating normal deactivates current scenario', () => {
-    engine.activate('kick-detection');
-    engine.activate('normal');
-    expect(engine.getActiveScenarioName()).toBe('normal');
-  });
-
   it('switching scenarios deactivates previous', () => {
-    engine.activate('kick-detection');
-    engine.activate('pod-failure');
-    expect(engine.getActiveScenarioName()).toBe('pod-failure');
+    const s1 = createCustomScenario({ name: 's1', description: '', durationMs: 60000, modifiers: [] });
+    const s2 = createCustomScenario({ name: 's2', description: '', durationMs: 60000, modifiers: [] });
+    engine.register(s1);
+    engine.register(s2);
+    engine.activate('s1');
+    engine.activate('s2');
+    expect(engine.getActiveScenarioName()).toBe('s2');
   });
 });
 
@@ -289,8 +311,8 @@ describe('REST Handler', () => {
   let webId: string;
 
   beforeEach(() => {
-    registry = new TagRegistry('SIMULATOR');
-    generator = new DataGenerator(registry);
+    registry = createRegistry('SIMULATOR');
+    generator = createGenerator(registry);
     handler = createRestHandler(registry, generator);
     webId = registry.getByTagName('BOP.ACC.PRESS.SYS')!.webId;
 
@@ -395,7 +417,7 @@ describe('REST Handler', () => {
 
   it('GET /streams/{webId}/recorded defaults maxCount to 1000', () => {
     // Seed 1200 ticks to test that default maxCount is 1000 (not 100)
-    const gen2 = new DataGenerator(registry);
+    const gen2 = createGenerator(registry);
     const handler2 = createRestHandler(registry, gen2);
     const start = new Date('2026-02-20T12:00:00Z');
     for (let i = 0; i < 1200; i++) {
@@ -445,7 +467,7 @@ describe('REST Handler', () => {
 
   it('GET /streams/{webId}/interpolated returns empty Items when no history', () => {
     // Fresh generator with no ticks
-    const gen2 = new DataGenerator(registry);
+    const gen2 = createGenerator(registry);
     const handler2 = createRestHandler(registry, gen2);
 
     const req = mockReq('GET', `/piwebapi/streams/${webId}/interpolated?startTime=2026-02-20T12:00:00Z&endTime=2026-02-20T12:01:00Z&interval=30s`);

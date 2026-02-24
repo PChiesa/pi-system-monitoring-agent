@@ -35,21 +35,18 @@ Usage:
 
 Options:
   --port=PORT         Server port (default: 8443, env: SIM_PORT)
-  --scenario=NAME     Start with a specific scenario (switches to manual mode)
+  --scenario=NAME     Start with a custom scenario (switches to manual mode)
   --auto              Auto mode: randomly trigger scenarios (default)
   --interval=SEC      Auto mode interval in seconds (default: 600, env: SIM_AUTO_INTERVAL_MS)
   -h, --help          Show this help
 
-Available scenarios:
-  normal              Normal steady-state operation
-  accumulator-decay   Gradual accumulator pressure loss (8 min)
-  kick-detection      Well kick event (5 min)
-  ram-slowdown        Increasing BOP close times (10 min)
-  pod-failure         Blue control pod battery drain (6 min)
+Environment:
+  DATABASE_URL        PostgreSQL connection URL for persistent storage (optional)
+                      Without this, the simulator uses in-memory defaults
 
 Runtime control (while running):
   curl -k https://localhost:PORT/admin/status
-  curl -k -X POST https://localhost:PORT/admin/scenario -d '{"name":"kick-detection"}'
+  curl -k -X POST https://localhost:PORT/admin/scenario -d '{"name":"my-scenario"}'
   curl -k -X POST https://localhost:PORT/admin/scenario/stop
   curl -k https://localhost:PORT/admin/scenarios
 
@@ -66,6 +63,7 @@ async function main() {
   console.log('===============================================\n');
 
   const server = new SimulatorServer(config);
+  await server.init();
   await server.start();
 
   // Graceful shutdown

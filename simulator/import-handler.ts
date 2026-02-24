@@ -3,6 +3,9 @@ import { AFModel } from './af-model.js';
 import { TagRegistry } from './tag-registry.js';
 import { DataGenerator, type TagProfile } from './data-generator.js';
 import { sendJson, readBody } from './utils.js';
+import { hasDb } from './db/connection.js';
+import { insertTag } from './db/tag-repository.js';
+import { insertDatabase as dbInsertDatabase, insertElement as dbInsertElement, insertAttribute as dbInsertAttribute } from './db/af-repository.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -59,7 +62,8 @@ interface RemotePIPoint {
 interface ImportRequest {
   connection: PIConnectionConfig;
   remoteElementWebId: string;
-  targetParentWebId: string;
+  targetParentWebId?: string;
+  remoteDatabaseName?: string;
   maxDepth?: number;
   maxElements?: number;
   importTags?: boolean;
@@ -374,6 +378,24 @@ async function importSubtree(
   }
   counters.elements++;
 
+  // Persist element to DB
+  if (hasDb()) {
+    try {
+      const parentDbId = afModel.getDbId(localParentWebId);
+      const isDbParent = afModel.isDatabaseWebId(localParentWebId);
+      const databaseDbId = isDbParent ? parentDbId : afModel.getDbId(localEl.databaseWebId);
+      if (databaseDbId !== undefined) {
+        const row = await dbInsertElement(
+          remoteEl.Name,
+          remoteEl.Description || '',
+          databaseDbId,
+          isDbParent ? null : (parentDbId ?? null)
+        );
+        afModel.setDbId(localEl.webId, row.id);
+      }
+    } catch (err) { console.warn('[DB] Failed to persist imported element:', err); }
+  }
+
   // Stream progress event
   sendEvent(res, {
     type: 'progress',
@@ -422,6 +444,13 @@ async function importSubtree(
             registry.register(tagName, uom);
             generator.registerTag(tagName, profile);
             counters.tags++;
+
+            // Persist tag to DB
+            if (hasDb()) {
+              try { await insertTag(tagName, uom, profile); }
+              catch (err) { console.warn('[DB] Failed to persist imported tag:', err); }
+            }
+
             sendEvent(res, {
               type: 'progress',
               current: counters.elements,
@@ -457,6 +486,20 @@ async function importSubtree(
       );
       if (created) {
         counters.attributes++;
+
+        // Persist attribute to DB
+        if (hasDb()) {
+          try {
+            const elDbId = afModel.getDbId(localEl.webId);
+            if (elDbId !== undefined) {
+              const row = await dbInsertAttribute(
+                attr.Name, attr.Description || '', attr.Type || 'Double', uom, piPointName, elDbId
+              );
+              afModel.setDbId(created.webId, row.id);
+            }
+          } catch (err) { console.warn('[DB] Failed to persist imported attribute:', err); }
+        }
+
         sendEvent(res, {
           type: 'progress',
           current: counters.elements,
@@ -659,23 +702,39 @@ export function createImportHandler(
             sendJson(res, 400, { error: 'Missing connection details' });
             return;
           }
-          if (!body.remoteElementWebId || !body.targetParentWebId) {
-            sendJson(res, 400, { error: 'Missing remoteElementWebId or targetParentWebId' });
+          if (!body.remoteElementWebId) {
+            sendJson(res, 400, { error: 'Missing remoteElementWebId' });
             return;
           }
 
-          // Verify target parent exists
-          const parentIsDb = afModel.isDatabaseWebId(body.targetParentWebId);
-          const parentIsEl = afModel.isElementWebId(body.targetParentWebId);
-          if (!parentIsDb && !parentIsEl) {
-            sendJson(res, 404, { error: 'Target parent not found in local AF model' });
-            return;
+          // Resolve target parent — auto-create a database if none provided
+          let targetParentWebId = body.targetParentWebId;
+          if (!targetParentWebId) {
+            const dbName = body.remoteDatabaseName || 'Imported';
+            console.log(`[AF Import] No target parent specified, creating AF database "${dbName}"`);
+            const newDb = afModel.createDatabase(dbName, '');
+            targetParentWebId = newDb.webId;
+            if (hasDb()) {
+              try {
+                const row = await dbInsertDatabase(dbName, '');
+                afModel.setDbId(newDb.webId, row.id);
+              } catch (err) {
+                console.warn('[AF Import] Failed to persist auto-created database:', err);
+              }
+            }
+          } else {
+            const parentIsDb = afModel.isDatabaseWebId(targetParentWebId);
+            const parentIsEl = afModel.isElementWebId(targetParentWebId);
+            if (!parentIsDb && !parentIsEl) {
+              sendJson(res, 404, { error: 'Target parent not found in local AF model' });
+              return;
+            }
           }
 
           importing = true;
           const maxDepth = body.maxDepth ?? 10;
           const maxElements = body.maxElements ?? 500;
-          const importTags = body.importTags !== false;
+          const importTagsFlag = body.importTags !== false;
 
           // Start NDJSON stream
           res.writeHead(200, {
@@ -715,14 +774,14 @@ export function createImportHandler(
             registry,
             generator,
             body.remoteElementWebId,
-            body.targetParentWebId,
+            targetParentWebId,
             maxDepth,
             maxElements,
             1,
             counters,
             total,
             res,
-            importTags,
+            importTagsFlag,
           );
 
           const result: ImportResult = {

@@ -1,4 +1,5 @@
-import { TagRegistry } from './tag-registry.js';
+import type { AFDatabaseRow, AFElementRow, AFAttributeRow } from './db/af-repository.js';
+import { seedDefaultAFHierarchy } from './db/defaults.js';
 
 // ── AF Types ──────────────────────────────────────────────────────────────────
 
@@ -62,9 +63,147 @@ export class AFModel {
   private attributesByWebId = new Map<string, AFAttribute>();
   private dataArchive: string;
 
-  constructor(registry: TagRegistry) {
-    this.dataArchive = registry.dataArchive;
-    this.seed();
+  /** Maps webId → DB row id for persisted entities. */
+  private dbIdByWebId = new Map<string, number>();
+
+  constructor(dataArchive = 'SIMULATOR') {
+    this.dataArchive = dataArchive;
+  }
+
+  // ── DB ID tracking ──────────────────────────────────────────────────────
+
+  getDbId(webId: string): number | undefined {
+    return this.dbIdByWebId.get(webId);
+  }
+
+  setDbId(webId: string, id: number): void {
+    this.dbIdByWebId.set(webId, id);
+  }
+
+  // ── Bulk loading ────────────────────────────────────────────────────────
+
+  /** Reconstruct the AF tree from flat DB rows. */
+  loadFromDatabase(
+    dbRows: AFDatabaseRow[],
+    elementRows: AFElementRow[],
+    attrRows: AFAttributeRow[]
+  ): void {
+    // Build databases
+    const dbIdToWebId = new Map<number, string>();
+    for (const row of dbRows) {
+      const path = `\\\\${this.dataArchive}\\${row.name}`;
+      const webId = makeDbWebId(row.name);
+      const db: AFDatabase = {
+        webId,
+        id: row.uuid,
+        name: row.name,
+        description: row.description,
+        path,
+        elements: [],
+      };
+      this.databases.set(webId, db);
+      this.dbIdByWebId.set(webId, row.id);
+      dbIdToWebId.set(row.id, webId);
+    }
+
+    // Build elements — first pass: create all, second pass: wire parent/child
+    const elIdToWebId = new Map<number, string>();
+    const elementsByDbRowId = new Map<number, AFElement>();
+
+    // First pass: create elements (path depends on parent, so we need topo order)
+    // Elements are ordered by id (insertion order), parents before children
+    const pendingElements = [...elementRows];
+    const processedIds = new Set<number>();
+
+    // Iteratively resolve elements whose parent is already processed
+    let maxPasses = pendingElements.length + 1;
+    while (pendingElements.length > 0 && maxPasses-- > 0) {
+      const remaining: AFElementRow[] = [];
+      for (const row of pendingElements) {
+        const dbWebId = dbIdToWebId.get(row.database_id);
+        if (!dbWebId) { remaining.push(row); continue; }
+
+        let parentPath: string;
+        let parentWebId: string | null = null;
+
+        if (row.parent_id === null) {
+          // Root element
+          const db = this.databases.get(dbWebId);
+          if (!db) { remaining.push(row); continue; }
+          parentPath = db.path;
+        } else {
+          // Child element — parent must be processed first
+          if (!processedIds.has(row.parent_id)) { remaining.push(row); continue; }
+          const parentEl = elementsByDbRowId.get(row.parent_id);
+          if (!parentEl) { remaining.push(row); continue; }
+          parentPath = parentEl.path;
+          parentWebId = parentEl.webId;
+        }
+
+        const path = `${parentPath}\\${row.name}`;
+        const webId = makeElementWebId(path);
+        const el: AFElement = {
+          webId,
+          id: row.uuid,
+          name: row.name,
+          description: row.description,
+          path,
+          parentWebId,
+          databaseWebId: dbWebId,
+          children: [],
+          attributes: [],
+        };
+
+        this.elementsByWebId.set(webId, el);
+        this.dbIdByWebId.set(webId, row.id);
+        elIdToWebId.set(row.id, webId);
+        elementsByDbRowId.set(row.id, el);
+        processedIds.add(row.id);
+
+        // Attach to parent
+        if (parentWebId) {
+          const parent = this.elementsByWebId.get(parentWebId);
+          if (parent) parent.children.push(el);
+        } else {
+          const db = this.databases.get(dbWebId);
+          if (db) db.elements.push(el);
+        }
+      }
+      pendingElements.length = 0;
+      pendingElements.push(...remaining);
+    }
+
+    // Build attributes
+    for (const row of attrRows) {
+      const elWebId = elIdToWebId.get(row.element_id);
+      if (!elWebId) continue;
+      const el = this.elementsByWebId.get(elWebId);
+      if (!el) continue;
+
+      const path = `${el.path}|${row.name}`;
+      const webId = makeAttributeWebId(path);
+      const attr: AFAttribute = {
+        webId,
+        id: row.uuid,
+        name: row.name,
+        description: row.description,
+        path,
+        type: row.type,
+        defaultUOM: row.default_uom,
+        dataReference: row.pi_point_name ? 'PI Point' : '',
+        piPointName: row.pi_point_name,
+        elementWebId: elWebId,
+      };
+
+      el.attributes.push(attr);
+      this.attributesByWebId.set(webId, attr);
+      this.dbIdByWebId.set(webId, row.id);
+    }
+  }
+
+  /** Populate with the built-in BOP hierarchy (non-DB mode). */
+  loadFromDefaults(): void {
+    seedDefaultAFHierarchy(this);
   }
 
   // ── Lookup ────────────────────────────────────────────────────────────────
@@ -237,8 +376,10 @@ export class AFModel {
       }
       for (const attr of element.attributes) {
         this.attributesByWebId.delete(attr.webId);
+        this.dbIdByWebId.delete(attr.webId);
       }
       this.elementsByWebId.delete(element.webId);
+      this.dbIdByWebId.delete(element.webId);
     };
     deleteRecursive(el);
 
@@ -267,65 +408,7 @@ export class AFModel {
       el.attributes = el.attributes.filter((a) => a.webId !== webId);
     }
     this.attributesByWebId.delete(webId);
+    this.dbIdByWebId.delete(webId);
     return true;
-  }
-
-  // ── Seed default BOP hierarchy ────────────────────────────────────────────
-
-  private seed(): void {
-    const db = this.createDatabase('BOP_Database', 'BOP Monitoring Asset Database');
-
-    const rig = this.createElement(db.webId, 'Rig', 'Drilling Rig')!;
-    const bopStack = this.createElement(rig.webId, 'BOP Stack', 'Blowout Preventer Stack')!;
-
-    // Accumulator System
-    const accumulator = this.createElement(bopStack.webId, 'Accumulator System', 'Hydraulic accumulator system')!;
-    this.createAttribute(accumulator.webId, 'System Pressure', 'Double', 'PSI', 'BOP.ACC.PRESS.SYS');
-    this.createAttribute(accumulator.webId, 'Pre-Charge Pressure', 'Double', 'PSI', 'BOP.ACC.PRESS.PRCHG');
-    this.createAttribute(accumulator.webId, 'Hydraulic Level', 'Double', 'gal', 'BOP.ACC.HYD.LEVEL');
-    this.createAttribute(accumulator.webId, 'Hydraulic Temp', 'Double', '°F', 'BOP.ACC.HYD.TEMP');
-
-    // Annular Preventer
-    const annular = this.createElement(bopStack.webId, 'Annular Preventer', 'Annular BOP preventer')!;
-    this.createAttribute(annular.webId, 'Close Pressure', 'Double', 'PSI', 'BOP.ANN01.PRESS.CL');
-    this.createAttribute(annular.webId, 'Position', 'Int32', '', 'BOP.ANN01.POS');
-    this.createAttribute(annular.webId, 'Close Time', 'Double', 'sec', 'BOP.ANN01.CLOSETIME');
-
-    // Pipe Ram
-    const pipeRam = this.createElement(bopStack.webId, 'Pipe Ram', 'Pipe ram preventer')!;
-    this.createAttribute(pipeRam.webId, 'Position', 'Int32', '', 'BOP.RAM.PIPE01.POS');
-    this.createAttribute(pipeRam.webId, 'Close Time', 'Double', 'sec', 'BOP.RAM.PIPE01.CLOSETIME');
-
-    // Blind Shear Ram
-    const bsr = this.createElement(bopStack.webId, 'Blind Shear Ram', 'Blind shear ram preventer')!;
-    this.createAttribute(bsr.webId, 'Position', 'Int32', '', 'BOP.RAM.BSR01.POS');
-    this.createAttribute(bsr.webId, 'Close Time', 'Double', 'sec', 'BOP.RAM.BSR01.CLOSETIME');
-
-    // Manifold
-    const manifold = this.createElement(bopStack.webId, 'Manifold', 'Choke and kill manifold')!;
-    this.createAttribute(manifold.webId, 'Regulated Pressure', 'Double', 'PSI', 'BOP.MAN.PRESS.REG');
-    this.createAttribute(manifold.webId, 'Choke Pressure', 'Double', 'PSI', 'BOP.CHOKE.PRESS');
-    this.createAttribute(manifold.webId, 'Kill Pressure', 'Double', 'PSI', 'BOP.KILL.PRESS');
-
-    // Control System
-    const controlSystem = this.createElement(bopStack.webId, 'Control System', 'BOP control pods')!;
-
-    const bluePod = this.createElement(controlSystem.webId, 'Blue Pod', 'Blue control pod')!;
-    this.createAttribute(bluePod.webId, 'Status', 'Int32', '', 'BOP.CTRL.POD.BLUE.STATUS');
-    this.createAttribute(bluePod.webId, 'Battery Voltage', 'Double', 'V', 'BOP.CTRL.BATT.BLUE.VOLTS');
-
-    const yellowPod = this.createElement(controlSystem.webId, 'Yellow Pod', 'Yellow control pod')!;
-    this.createAttribute(yellowPod.webId, 'Status', 'Int32', '', 'BOP.CTRL.POD.YELLOW.STATUS');
-    this.createAttribute(yellowPod.webId, 'Battery Voltage', 'Double', 'V', 'BOP.CTRL.BATT.YELLOW.VOLTS');
-
-    // Wellbore
-    const wellbore = this.createElement(rig.webId, 'Wellbore', 'Wellbore monitoring')!;
-    this.createAttribute(wellbore.webId, 'Casing Pressure', 'Double', 'PSI', 'WELL.PRESS.CASING');
-    this.createAttribute(wellbore.webId, 'Standpipe Pressure', 'Double', 'PSI', 'WELL.PRESS.SPP');
-    this.createAttribute(wellbore.webId, 'Flow In', 'Double', 'GPM', 'WELL.FLOW.IN');
-    this.createAttribute(wellbore.webId, 'Flow Out', 'Double', 'GPM', 'WELL.FLOW.OUT');
-    this.createAttribute(wellbore.webId, 'Flow Delta', 'Double', 'GPM', 'WELL.FLOW.DELTA');
-    this.createAttribute(wellbore.webId, 'Pit Volume Total', 'Double', 'bbl', 'WELL.PIT.VOL.TOTAL');
-    this.createAttribute(wellbore.webId, 'Pit Volume Delta', 'Double', 'bbl', 'WELL.PIT.VOL.DELTA');
   }
 }

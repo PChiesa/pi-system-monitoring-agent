@@ -330,7 +330,8 @@ export function ImportAFDialog({ open, onOpenChange, targetParentWebId, onImport
         {
           connection: getConnection(),
           remoteElementWebId: selectedRemoteElement,
-          targetParentWebId: targetParentWebId,
+          targetParentWebId: targetParentWebId || undefined,
+          remoteDatabaseName: remoteDatabases.find(d => d.WebId === selectedRemoteDb)?.Name,
           maxDepth,
           maxElements,
           importTags,

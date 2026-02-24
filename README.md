@@ -88,19 +88,40 @@ Once running, the agent will:
 
 A local simulator is included for development and testing without a real PI Web API server. It generates realistic BOP sensor data using an Ornstein-Uhlenbeck process (mean-reverting random walk) for continuous tags and provides the same REST and WebSocket interfaces the agent expects.
 
-The simulator also includes a **Configuration UI**, **custom scenario builder**, and a **PI AF (Asset Framework) hierarchy simulator** for mapping tags to element attributes.
+The simulator also includes a **Configuration UI**, **custom scenario builder**, **PI AF (Asset Framework) hierarchy simulator**, and optional **PostgreSQL persistence** for durable state across restarts.
 
 ### Running the simulator
+
+**Without Docker** (in-memory defaults, no persistence):
 
 ```bash
 bun run simulator
 ```
+
+**With Docker** (PostgreSQL persistence):
+
+```bash
+docker compose up
+```
+
+This starts PostgreSQL (empty schema, no seed data) and the simulator connected to it. Tags, AF hierarchy, and scenarios are persisted — they survive container restarts.
 
 Then connect the agent in a separate terminal:
 
 ```bash
 PI_SERVER=localhost:8443 PI_DATA_ARCHIVE=SIMULATOR PI_USERNAME=sim PI_PASSWORD=sim bun run dev
 ```
+
+### Persistence
+
+When `DATABASE_URL` is set, the simulator persists all state to PostgreSQL:
+- **Tags** — tag names, units, profiles, custom groups
+- **AF hierarchy** — databases, elements, attributes
+- **Custom scenarios** — name, description, duration, modifiers
+
+All admin API mutations (create/update/delete) write through to the database. On startup, data is loaded from PostgreSQL. The database starts empty — all data is created at runtime via the admin API, Configuration UI, or AF import.
+
+When `DATABASE_URL` is not set, the simulator falls back to in-memory defaults: 25 built-in tags with a BOP AF hierarchy. No scenarios are available until created via the API.
 
 ### Configuration UI
 
@@ -125,32 +146,24 @@ The built UI is served as static files by the simulator at `/ui/`. During develo
 | Option | Description |
 |---|---|
 | `--port=PORT` | Server port (default: 8443, env: `SIM_PORT`) |
-| `--scenario=NAME` | Start with a specific scenario (switches to manual mode) |
-| `--auto` | Auto mode: randomly trigger fault scenarios (default) |
+| `--scenario=NAME` | Start with a custom scenario (switches to manual mode) |
+| `--auto` | Auto mode: randomly trigger custom scenarios (default) |
 | `--interval=SEC` | Auto mode interval in seconds (default: 600, env: `SIM_AUTO_INTERVAL_MS`) |
 | `-h, --help` | Show help |
 
-### Fault scenarios
+### Custom scenarios
 
-The simulator ships with five built-in scenarios that progressively push sensor values through warning and critical thresholds:
+All scenarios are user-created — there are no built-in scenarios. Create them via the Configuration UI or the admin REST API. Each scenario defines a set of per-tag modifiers with start/end values, duration, and a curve type (linear, step, or exponential).
 
-| Scenario | Duration | Description |
-|---|---|---|
-| `normal` | indefinite | Steady-state operation — all parameters at nominal with standard noise |
-| `accumulator-decay` | 8 min | Gradual accumulator pressure loss simulating a hydraulic leak |
-| `kick-detection` | 5 min | Well kick event — pit gain, flow increase, casing pressure rise |
-| `ram-slowdown` | 10 min | Increasing BOP close times simulating seal wear or N2 depletion |
-| `pod-failure` | 6 min | Blue control pod battery drain and failure |
+In **auto mode** (the default), the simulator randomly activates available custom scenarios on a configurable interval. In **manual mode** (`--scenario=NAME`), a named custom scenario runs immediately.
 
-In **auto mode** (the default), the simulator randomly activates fault scenarios on a configurable interval. In **manual mode** (`--scenario=NAME`), a single scenario runs immediately.
-
-Custom scenarios can be created via the Configuration UI or the admin REST API. Each modifier defines a tag, start/end values, and a curve type (linear, step, or exponential).
+When running with PostgreSQL, custom scenarios are persisted and survive restarts.
 
 ### Asset Framework (AF) Simulator
 
 The simulator includes a PI AF hierarchy that mirrors the BOP equipment structure. This enables testing of AF-aware clients without a real PI AF server.
 
-The default hierarchy is seeded on startup:
+Without `DATABASE_URL`, the default hierarchy is seeded on startup. With `DATABASE_URL`, the AF hierarchy is loaded from PostgreSQL (empty initially — populate via the admin API or AF import).
 
 ```
 BOP_Database
@@ -177,7 +190,7 @@ While the simulator is running, use the admin endpoints to inspect and control i
 # Status & scenarios
 curl -k https://localhost:8443/admin/status
 curl -k https://localhost:8443/admin/scenarios
-curl -k -X POST https://localhost:8443/admin/scenario -d '{"name":"kick-detection"}'
+curl -k -X POST https://localhost:8443/admin/scenario -d '{"name":"my-scenario"}'
 curl -k -X POST https://localhost:8443/admin/scenario/stop
 
 # Tag configuration
@@ -231,25 +244,26 @@ src/
 
 simulator/
   index.ts              # Entry point — CLI argument parsing, server startup
-  server.ts             # SimulatorServer — HTTPS server, admin endpoints, static UI serving, 1 Hz tick
-  tag-registry.ts       # Tag metadata registry (WebId generation, path lookup)
-  data-generator.ts     # Ornstein-Uhlenbeck data generator with scenario modifiers and runtime profile updates
-  scenario-engine.ts    # Scenario lifecycle management (auto/manual modes, custom scenario support)
+  server.ts             # SimulatorServer — HTTPS server, admin endpoints, static UI serving, DB persistence
+  tag-registry.ts       # Tag metadata registry (WebId generation, path lookup, loadFromDatabase/loadFromDefaults)
+  data-generator.ts     # Ornstein-Uhlenbeck data generator with scenario modifiers, loadProfiles/loadFromDefaults
+  scenario-engine.ts    # Scenario lifecycle management (auto/manual modes, custom scenarios only)
   rest-handler.ts       # PI Web API REST endpoint handlers (points, streams, recorded)
   ws-handler.ts         # WebSocket channel handler (streamsets/channel, 1 Hz push)
-  af-model.ts           # PI AF hierarchy — in-memory database/element/attribute model with BOP seed data
+  af-model.ts           # PI AF hierarchy — in-memory model, loadFromDatabase/loadFromDefaults, DB ID tracking
   af-handler.ts         # PI Web API AF endpoint handlers (assetdatabases, elements, attributes)
-  import-handler.ts     # AF import from remote PI Web API — server-side proxy, NDJSON streaming, tag creation
+  import-handler.ts     # AF import from remote PI Web API — server-side proxy, NDJSON streaming, DB persistence
   custom-scenario.ts    # Custom scenario builder — creates Scenario objects from JSON definitions
   utils.ts              # Shared utilities (sendJson, readBody)
   tls.ts                # Self-signed TLS certificate generation
   pi-time.ts            # PI time syntax parser (*-1h, *-30m, ISO 8601)
-  scenarios/
-    normal.ts           # Steady-state operation (no modifiers)
-    accumulator-decay.ts # Hydraulic leak — accumulator pressure decay
-    kick-detection.ts   # Well kick — pit gain, flow increase, casing pressure rise
-    ram-slowdown.ts     # Increasing BOP close times — seal wear / N2 depletion
-    pod-failure.ts      # Blue pod battery drain and failure
+  db/
+    schema.sql          # PostgreSQL schema (tags, af_databases, af_elements, af_attributes, custom_scenarios)
+    connection.ts       # postgres connection pool, waitForDatabase with backoff, closeDatabase
+    defaults.ts         # Default constants (DEFAULT_TAGS, DEFAULT_TAG_PROFILES, seedDefaultAFHierarchy)
+    tag-repository.ts   # Tag CRUD: loadAllTags, insertTag, updateTagProfile, deleteTag
+    af-repository.ts    # AF CRUD: loadAllDatabases/Elements/Attributes, insert/update/delete
+    scenario-repository.ts # Custom scenario CRUD: loadAllCustomScenarios, insert/update/delete
   ui/                   # React configuration UI (separate Vite project)
     src/
       App.tsx           # Router: Dashboard | Tags | Scenarios | Asset Framework
@@ -282,6 +296,7 @@ Tests run with Bun's built-in test runner (`bun:test`). All external dependencie
 - **WebSocket**: ws
 - **Validation**: zod
 - **Testing**: Bun's built-in test runner (`bun:test`)
+- **Simulator DB**: PostgreSQL 17 (optional, via `postgres` v3 driver)
 - **Simulator UI**: React 19, Vite, Tailwind CSS v4, shadcn/ui
 
 ## Regulatory Context

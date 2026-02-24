@@ -103,8 +103,11 @@ describe('import-handler', () => {
     spyOn(console, 'log').mockImplementation(() => {});
     spyOn(console, 'error').mockImplementation(() => {});
     registry = new TagRegistry();
+    registry.loadFromDefaults();
     generator = new DataGenerator(registry);
-    afModel = new AFModel(registry);
+    generator.loadFromDefaults();
+    afModel = new AFModel();
+    afModel.loadFromDefaults();
     handler = createImportHandler(afModel, registry, generator);
     fetchMock = spyOn(globalThis, 'fetch');
   });

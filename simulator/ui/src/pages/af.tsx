@@ -75,12 +75,14 @@ export function AFPage() {
     return m;
   }, [tags]);
 
-  useEffect(() => {
-    api.getAFDatabases().then(({ Items }) => {
-      setDatabases(Items);
-      if (Items.length > 0) setSelectedDb(Items[0].WebId);
-    });
-  }, []);
+  const loadDatabases = useCallback(async () => {
+    const { Items } = await api.getAFDatabases();
+    setDatabases(Items);
+    if (Items.length > 0 && !selectedDb) setSelectedDb(Items[0].WebId);
+    return Items;
+  }, [selectedDb]);
+
+  useEffect(() => { loadDatabases(); }, []);
 
   const loadTree = useCallback(async (dbWebId: string) => {
     async function loadRecursive(elements: AFElementResp[]): Promise<TreeNode[]> {
@@ -304,7 +306,14 @@ export function AFPage() {
         open={showImportDialog}
         onOpenChange={setShowImportDialog}
         targetParentWebId={selectedElement || selectedDb}
-        onImportComplete={() => { if (selectedDb) loadTree(selectedDb); }}
+        onImportComplete={async () => {
+          const dbs = await loadDatabases();
+          const dbWebId = selectedDb || (dbs.length > 0 ? dbs[0].WebId : '');
+          if (dbWebId) {
+            if (!selectedDb) setSelectedDb(dbWebId);
+            loadTree(dbWebId);
+          }
+        }}
       />
     </div>
   );

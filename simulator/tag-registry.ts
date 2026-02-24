@@ -1,52 +1,11 @@
+import { DEFAULT_TAGS } from './db/defaults.js';
+
 export interface TagMeta {
   tagName: string;
   webId: string;
   unit: string;
   path: string;
 }
-
-/**
- * All 25 monitored tags — duplicated from src/config.ts to avoid importing
- * production code (which pulls in dotenv and requires a .env file).
- */
-const TAGS: Record<string, string> = {
-  // Accumulator system
-  'BOP.ACC.PRESS.SYS': 'PSI',
-  'BOP.ACC.PRESS.PRCHG': 'PSI',
-  'BOP.ACC.HYD.LEVEL': 'gal',
-  'BOP.ACC.HYD.TEMP': '°F',
-
-  // Annular preventer
-  'BOP.ANN01.PRESS.CL': 'PSI',
-  'BOP.ANN01.POS': '',
-  'BOP.ANN01.CLOSETIME': 'sec',
-
-  // Ram preventers
-  'BOP.RAM.PIPE01.POS': '',
-  'BOP.RAM.PIPE01.CLOSETIME': 'sec',
-  'BOP.RAM.BSR01.POS': '',
-  'BOP.RAM.BSR01.CLOSETIME': 'sec',
-
-  // Manifold & lines
-  'BOP.MAN.PRESS.REG': 'PSI',
-  'BOP.CHOKE.PRESS': 'PSI',
-  'BOP.KILL.PRESS': 'PSI',
-
-  // Control system
-  'BOP.CTRL.POD.BLUE.STATUS': '',
-  'BOP.CTRL.POD.YELLOW.STATUS': '',
-  'BOP.CTRL.BATT.BLUE.VOLTS': 'V',
-  'BOP.CTRL.BATT.YELLOW.VOLTS': 'V',
-
-  // Wellbore
-  'WELL.PRESS.CASING': 'PSI',
-  'WELL.PRESS.SPP': 'PSI',
-  'WELL.FLOW.IN': 'GPM',
-  'WELL.FLOW.OUT': 'GPM',
-  'WELL.FLOW.DELTA': 'GPM',
-  'WELL.PIT.VOL.TOTAL': 'bbl',
-  'WELL.PIT.VOL.DELTA': 'bbl',
-};
 
 function makeWebId(tagName: string): string {
   return 'SIM_' + Buffer.from(tagName).toString('base64url');
@@ -59,17 +18,28 @@ export class TagRegistry {
 
   constructor(dataArchive = 'SIMULATOR') {
     this.dataArchive = dataArchive;
+  }
 
-    for (const [tagName, unit] of Object.entries(TAGS)) {
+  /** Populate registry from pre-loaded tag data (DB or import). */
+  loadFromDatabase(tags: Array<{ tagName: string; unit: string }>): void {
+    for (const { tagName, unit } of tags) {
+      if (this.byTag.has(tagName)) continue;
       const meta: TagMeta = {
         tagName,
         webId: makeWebId(tagName),
         unit,
-        path: `\\\\${dataArchive}\\${tagName}`,
+        path: `\\\\${this.dataArchive}\\${tagName}`,
       };
       this.byTag.set(tagName, meta);
       this.byWebId.set(meta.webId, meta);
     }
+  }
+
+  /** Populate registry from the built-in default tag list (non-DB mode). */
+  loadFromDefaults(): void {
+    this.loadFromDatabase(
+      Object.entries(DEFAULT_TAGS).map(([tagName, unit]) => ({ tagName, unit }))
+    );
   }
 
   getByTagName(tagName: string): TagMeta | undefined {

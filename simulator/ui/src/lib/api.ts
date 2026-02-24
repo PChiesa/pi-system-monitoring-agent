@@ -73,7 +73,8 @@ export const api = {
     data: {
       connection: PIConnectionConfig;
       remoteElementWebId: string;
-      targetParentWebId: string;
+      targetParentWebId?: string;
+      remoteDatabaseName?: string;
       maxDepth?: number;
       maxElements?: number;
       importTags?: boolean;

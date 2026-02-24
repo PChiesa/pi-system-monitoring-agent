@@ -1,11 +1,5 @@
 import { DataGenerator } from './data-generator.js';
 
-import { normalScenario } from './scenarios/normal.js';
-import { accumulatorDecayScenario } from './scenarios/accumulator-decay.js';
-import { kickDetectionScenario } from './scenarios/kick-detection.js';
-import { ramSlowdownScenario } from './scenarios/ram-slowdown.js';
-import { podFailureScenario } from './scenarios/pod-failure.js';
-
 export interface Scenario {
   name: string;
   description: string;
@@ -14,8 +8,6 @@ export interface Scenario {
   activate(generator: DataGenerator): void;
   deactivate(generator: DataGenerator): void;
 }
-
-const BUILT_IN_SCENARIOS = ['normal', 'accumulator-decay', 'kick-detection', 'ram-slowdown', 'pod-failure'];
 
 export class ScenarioEngine {
   private scenarios = new Map<string, Scenario>();
@@ -27,13 +19,6 @@ export class ScenarioEngine {
   constructor(generator: DataGenerator, mode: 'auto' | 'manual' = 'auto') {
     this.generator = generator;
     this.mode = mode;
-
-    // Register built-in scenarios
-    this.register(normalScenario);
-    this.register(accumulatorDecayScenario);
-    this.register(kickDetectionScenario);
-    this.register(ramSlowdownScenario);
-    this.register(podFailureScenario);
   }
 
   register(scenario: Scenario): void {
@@ -48,11 +33,6 @@ export class ScenarioEngine {
     return this.scenarios.delete(name);
   }
 
-  /** Check if a scenario is a built-in (non-removable) scenario. */
-  isBuiltIn(name: string): boolean {
-    return BUILT_IN_SCENARIOS.includes(name);
-  }
-
   /** Activate a scenario by name. Returns true if found and activated. */
   activate(name: string): boolean {
     const scenario = this.scenarios.get(name);
@@ -60,8 +40,6 @@ export class ScenarioEngine {
 
     // Deactivate current if any
     this.deactivate();
-
-    if (name === 'normal') return true; // Normal = no modifiers
 
     console.log(`[PI Simulator] Activating scenario: ${name} (${scenario.description})`);
 
@@ -72,7 +50,7 @@ export class ScenarioEngine {
     let timer: ReturnType<typeof setTimeout> | null = null;
     if (scenario.durationMs > 0) {
       timer = setTimeout(() => {
-        console.log(`[PI Simulator] Scenario "${name}" complete, returning to normal`);
+        console.log(`[PI Simulator] Scenario "${name}" complete, returning to idle`);
         this.deactivate();
       }, scenario.durationMs);
     }
@@ -81,7 +59,7 @@ export class ScenarioEngine {
     return true;
   }
 
-  /** Deactivate the current scenario and return to normal. */
+  /** Deactivate the current scenario and return to idle. */
   deactivate(): void {
     if (!this.activeScenario) return;
 
@@ -98,10 +76,6 @@ export class ScenarioEngine {
     if (this.autoInterval) return;
     this.mode = 'auto';
 
-    const faultScenarios = [...this.scenarios.values()].filter(
-      (s) => s.name !== 'normal' && s.durationMs > 0
-    );
-
     console.log(
       `[PI Simulator] Auto mode: random scenarios every ~${Math.round(intervalMs / 60000)} min`
     );
@@ -109,7 +83,10 @@ export class ScenarioEngine {
     this.autoInterval = setInterval(() => {
       if (this.activeScenario) return; // Don't overlap scenarios
 
-      const scenario = faultScenarios[Math.floor(Math.random() * faultScenarios.length)]!;
+      const available = [...this.scenarios.values()].filter((s) => s.durationMs > 0);
+      if (available.length === 0) return;
+
+      const scenario = available[Math.floor(Math.random() * available.length)]!;
       this.activate(scenario.name);
     }, intervalMs);
   }
@@ -122,9 +99,9 @@ export class ScenarioEngine {
     }
   }
 
-  /** Get the current scenario name, or 'normal' if none active. */
+  /** Get the current scenario name, or 'none' if none active. */
   getActiveScenarioName(): string {
-    return this.activeScenario?.scenario.name ?? 'normal';
+    return this.activeScenario?.scenario.name ?? 'none';
   }
 
   /** Get all registered scenario names and descriptions. */

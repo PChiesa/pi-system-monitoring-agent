@@ -17,6 +17,10 @@ import { AFModel } from './af-model.js';
 import { createAFHandler } from './af-handler.js';
 import { createImportHandler } from './import-handler.js';
 import { sendJson, readBody } from './utils.js';
+import { initDatabase, waitForDatabase, closeDatabase, hasDb } from './db/connection.js';
+import { loadAllTags, insertTag, updateTagProfile as dbUpdateTagProfile, updateTagGroup as dbUpdateTagGroup, deleteTag as dbDeleteTag, rowToProfile } from './db/tag-repository.js';
+import { loadAllDatabases, loadAllElements, loadAllAttributes, insertDatabase as dbInsertDatabase, insertElement as dbInsertElement, insertAttribute as dbInsertAttribute, updateElement as dbUpdateElement, updateAttribute as dbUpdateAttribute, deleteElement as dbDeleteElement, deleteAttribute as dbDeleteAttribute } from './db/af-repository.js';
+import { loadAllCustomScenarios, insertCustomScenario as dbInsertCustomScenario, updateCustomScenario as dbUpdateCustomScenario, deleteCustomScenario as dbDeleteCustomScenario } from './db/scenario-repository.js';
 
 export interface SimulatorConfig {
   port: number;
@@ -48,10 +52,51 @@ export class SimulatorServer {
     this.scenarioEngine = new ScenarioEngine(this.generator, config.mode);
     this.wsHandler = new WSHandler(this.registry, this.generator);
     this.restHandler = createRestHandler(this.registry, this.generator);
-    this.afModel = new AFModel(this.registry);
+    this.afModel = new AFModel();
     this.wsHandler.setAFModel(this.afModel);
     this.afHandler = createAFHandler(this.afModel, this.generator);
     this.importHandler = createImportHandler(this.afModel, this.registry, this.generator);
+  }
+
+  /** Initialize data — load from DB if DATABASE_URL is set, otherwise use in-memory defaults. */
+  async init(): Promise<void> {
+    if (process.env.DATABASE_URL) {
+      console.log('[PI Simulator] DATABASE_URL set — connecting to PostgreSQL...');
+      initDatabase();
+      await waitForDatabase();
+
+      // Load tags
+      const tagRows = await loadAllTags();
+      this.registry.loadFromDatabase(tagRows.map((r) => ({ tagName: r.tag_name, unit: r.unit })));
+      const profiles = new Map<string, import('./data-generator.js').TagProfile>();
+      for (const row of tagRows) {
+        profiles.set(row.tag_name, rowToProfile(row));
+        if (row.custom_group) this.customTagGroups.set(row.tag_name, row.custom_group);
+      }
+      this.generator.loadProfiles(profiles);
+
+      // Load AF hierarchy
+      const dbRows = await loadAllDatabases();
+      const elRows = await loadAllElements();
+      const attrRows = await loadAllAttributes();
+      this.afModel.loadFromDatabase(dbRows, elRows, attrRows);
+
+      // Load custom scenarios
+      const scenarioDefs = await loadAllCustomScenarios();
+      for (const def of scenarioDefs) {
+        this.customScenarios.set(def.name, def);
+        this.scenarioEngine.register(createCustomScenario(def));
+      }
+
+      console.log(
+        `[PI Simulator] Loaded from DB: ${tagRows.length} tags, ${dbRows.length} AF databases, ${elRows.length} elements, ${attrRows.length} attributes, ${scenarioDefs.length} scenarios`
+      );
+    } else {
+      console.log('[PI Simulator] No DATABASE_URL — using in-memory defaults');
+      this.registry.loadFromDefaults();
+      this.generator.loadFromDefaults();
+      this.afModel.loadFromDefaults();
+    }
   }
 
   async start(): Promise<void> {
@@ -98,7 +143,7 @@ export class SimulatorServer {
         // Start scenario engine
         if (this.config.mode === 'auto') {
           this.scenarioEngine.startAuto(this.config.autoIntervalMs);
-        } else if (this.config.scenario && this.config.scenario !== 'normal') {
+        } else if (this.config.scenario) {
           this.scenarioEngine.activate(this.config.scenario);
         }
 
@@ -116,6 +161,10 @@ export class SimulatorServer {
     if (this.tickInterval) {
       clearInterval(this.tickInterval);
       this.tickInterval = null;
+    }
+
+    if (hasDb()) {
+      await closeDatabase();
     }
 
     return new Promise((resolve, reject) => {
@@ -185,7 +234,7 @@ export class SimulatorServer {
 
     if (url.pathname === '/admin/scenario/stop' && req.method === 'POST') {
       this.scenarioEngine.deactivate();
-      sendJson(res, 200, { status: 'ok', scenario: 'normal' });
+      sendJson(res, 200, { status: 'ok', scenario: 'none' });
       return;
     }
 
@@ -231,11 +280,17 @@ export class SimulatorServer {
     }
 
     if (url.pathname === '/admin/af/databases' && req.method === 'POST') {
-      readBody(req, (body) => {
+      readBody(req, async (body) => {
         try {
           const { name, description } = JSON.parse(body);
           if (!name) { sendJson(res, 400, { error: 'Missing "name"' }); return; }
           const db = this.afModel.createDatabase(name, description ?? '');
+          if (hasDb()) {
+            try {
+              const row = await dbInsertDatabase(name, description ?? '');
+              this.afModel.setDbId(db.webId, row.id);
+            } catch (err) { console.warn('[DB] Failed to persist AF database:', err); }
+          }
           sendJson(res, 201, db);
         } catch { sendJson(res, 400, { error: 'Invalid JSON body' }); }
       });
@@ -243,7 +298,7 @@ export class SimulatorServer {
     }
 
     if (url.pathname === '/admin/af/elements' && req.method === 'POST') {
-      readBody(req, (body) => {
+      readBody(req, async (body) => {
         try {
           const { parentWebId, name, description } = JSON.parse(body);
           if (!parentWebId || !name) {
@@ -252,6 +307,25 @@ export class SimulatorServer {
           }
           const el = this.afModel.createElement(parentWebId, name, description ?? '');
           if (!el) { sendJson(res, 404, { error: 'Parent not found' }); return; }
+          if (hasDb()) {
+            try {
+              // Resolve DB ids for parent
+              const parentDbId = this.afModel.getDbId(parentWebId);
+              const isDbParent = this.afModel.isDatabaseWebId(parentWebId);
+              const databaseDbId = isDbParent
+                ? parentDbId
+                : this.afModel.getDbId(el.databaseWebId);
+              if (databaseDbId !== undefined) {
+                const row = await dbInsertElement(
+                  name,
+                  description ?? '',
+                  databaseDbId,
+                  isDbParent ? null : (parentDbId ?? null)
+                );
+                this.afModel.setDbId(el.webId, row.id);
+              }
+            } catch (err) { console.warn('[DB] Failed to persist AF element:', err); }
+          }
           sendJson(res, 201, el);
         } catch { sendJson(res, 400, { error: 'Invalid JSON body' }); }
       });
@@ -262,17 +336,29 @@ export class SimulatorServer {
     if (afElementMatch) {
       const webId = decodeURIComponent(afElementMatch[1]!);
       if (req.method === 'PUT') {
-        readBody(req, (body) => {
+        readBody(req, async (body) => {
           try {
             const updates = JSON.parse(body);
             const ok = this.afModel.updateElement(webId, updates);
             if (!ok) { sendJson(res, 404, { error: 'Element not found' }); return; }
+            if (hasDb()) {
+              try {
+                const dbId = this.afModel.getDbId(webId);
+                if (dbId !== undefined) await dbUpdateElement(dbId, updates);
+              } catch (err) { console.warn('[DB] Failed to persist AF element update:', err); }
+            }
             sendJson(res, 200, this.afModel.getElement(webId));
           } catch { sendJson(res, 400, { error: 'Invalid JSON body' }); }
         });
         return;
       }
       if (req.method === 'DELETE') {
+        if (hasDb()) {
+          const dbId = this.afModel.getDbId(webId);
+          if (dbId !== undefined) {
+            dbDeleteElement(dbId).catch((err) => console.warn('[DB] Failed to persist AF element delete:', err));
+          }
+        }
         const ok = this.afModel.deleteElement(webId);
         if (!ok) { sendJson(res, 404, { error: 'Element not found' }); return; }
         sendJson(res, 200, { status: 'ok', deleted: webId });
@@ -281,7 +367,7 @@ export class SimulatorServer {
     }
 
     if (url.pathname === '/admin/af/attributes' && req.method === 'POST') {
-      readBody(req, (body) => {
+      readBody(req, async (body) => {
         try {
           const { elementWebId, name, type, defaultUOM, piPointName, description } = JSON.parse(body);
           if (!elementWebId || !name) {
@@ -292,6 +378,17 @@ export class SimulatorServer {
             elementWebId, name, type ?? 'Double', defaultUOM ?? '', piPointName ?? null, description ?? ''
           );
           if (!attr) { sendJson(res, 404, { error: 'Element not found' }); return; }
+          if (hasDb()) {
+            try {
+              const elDbId = this.afModel.getDbId(elementWebId);
+              if (elDbId !== undefined) {
+                const row = await dbInsertAttribute(
+                  name, description ?? '', type ?? 'Double', defaultUOM ?? '', piPointName ?? null, elDbId
+                );
+                this.afModel.setDbId(attr.webId, row.id);
+              }
+            } catch (err) { console.warn('[DB] Failed to persist AF attribute:', err); }
+          }
           sendJson(res, 201, attr);
         } catch { sendJson(res, 400, { error: 'Invalid JSON body' }); }
       });
@@ -302,17 +399,37 @@ export class SimulatorServer {
     if (afAttributeMatch) {
       const webId = decodeURIComponent(afAttributeMatch[1]!);
       if (req.method === 'PUT') {
-        readBody(req, (body) => {
+        readBody(req, async (body) => {
           try {
             const updates = JSON.parse(body);
             const ok = this.afModel.updateAttribute(webId, updates);
             if (!ok) { sendJson(res, 404, { error: 'Attribute not found' }); return; }
+            if (hasDb()) {
+              try {
+                const dbId = this.afModel.getDbId(webId);
+                if (dbId !== undefined) {
+                  await dbUpdateAttribute(dbId, {
+                    name: updates.name,
+                    description: updates.description,
+                    type: updates.type,
+                    defaultUom: updates.defaultUOM,
+                    piPointName: updates.piPointName,
+                  });
+                }
+              } catch (err) { console.warn('[DB] Failed to persist AF attribute update:', err); }
+            }
             sendJson(res, 200, this.afModel.getAttribute(webId));
           } catch { sendJson(res, 400, { error: 'Invalid JSON body' }); }
         });
         return;
       }
       if (req.method === 'DELETE') {
+        if (hasDb()) {
+          const dbId = this.afModel.getDbId(webId);
+          if (dbId !== undefined) {
+            dbDeleteAttribute(dbId).catch((err) => console.warn('[DB] Failed to persist AF attribute delete:', err));
+          }
+        }
         const ok = this.afModel.deleteAttribute(webId);
         if (!ok) { sendJson(res, 404, { error: 'Attribute not found' }); return; }
         sendJson(res, 200, { status: 'ok', deleted: webId });
@@ -423,6 +540,7 @@ export class SimulatorServer {
       wsClients: this.wsHandler.sessionCount,
       activeScenario: this.scenarioEngine.getActiveScenarioName(),
       mode: this.scenarioEngine.getMode(),
+      database: hasDb() ? 'connected' : 'none',
     });
   }
 
@@ -469,13 +587,17 @@ export class SimulatorServer {
     res: http.ServerResponse,
     tagName: string
   ): void {
-    readBody(req, (body) => {
+    readBody(req, async (body) => {
       try {
         const updates = JSON.parse(body);
         const ok = this.generator.updateProfile(tagName, updates);
         if (!ok) {
           sendJson(res, 404, { error: `Unknown tag "${tagName}"` });
           return;
+        }
+        if (hasDb()) {
+          try { await dbUpdateTagProfile(tagName, updates); }
+          catch (err) { console.warn('[DB] Failed to persist tag profile update:', err); }
         }
         sendJson(res, 200, { status: 'ok', tagName, profile: this.generator.getProfile(tagName) });
       } catch {
@@ -525,11 +647,14 @@ export class SimulatorServer {
     this.generator.unregisterTag(tagName);
     this.registry.unregister(tagName);
     this.customTagGroups.delete(tagName);
+    if (hasDb()) {
+      dbDeleteTag(tagName).catch((err) => console.warn('[DB] Failed to persist tag delete:', err));
+    }
     sendJson(res, 200, { status: 'ok', deleted: tagName });
   }
 
   private handleAdminCreateTag(req: http.IncomingMessage, res: http.ServerResponse): void {
-    readBody(req, (body) => {
+    readBody(req, async (body) => {
       try {
         const { tagName, unit, group, profile } = JSON.parse(body);
         if (!tagName || !profile) {
@@ -544,6 +669,10 @@ export class SimulatorServer {
         this.generator.registerTag(tagName, profile);
         if (group) {
           this.customTagGroups.set(tagName, group);
+        }
+        if (hasDb()) {
+          try { await insertTag(tagName, unit ?? '', profile, group); }
+          catch (err) { console.warn('[DB] Failed to persist tag create:', err); }
         }
         sendJson(res, 201, {
           status: 'ok',
@@ -563,19 +692,19 @@ export class SimulatorServer {
   }
 
   private handleCreateCustomScenario(req: http.IncomingMessage, res: http.ServerResponse): void {
-    readBody(req, (body) => {
+    readBody(req, async (body) => {
       try {
         const def = JSON.parse(body) as CustomScenarioDefinition;
         if (!def.name || !def.durationMs || !Array.isArray(def.modifiers)) {
           sendJson(res, 400, { error: 'Missing required fields: name, durationMs, modifiers[]' });
           return;
         }
-        if (this.scenarioEngine.isBuiltIn(def.name)) {
-          sendJson(res, 409, { error: `Cannot overwrite built-in scenario "${def.name}"` });
-          return;
-        }
         this.customScenarios.set(def.name, def);
         this.scenarioEngine.register(createCustomScenario(def));
+        if (hasDb()) {
+          try { await dbInsertCustomScenario(def); }
+          catch (err) { console.warn('[DB] Failed to persist custom scenario create:', err); }
+        }
         sendJson(res, 201, { status: 'ok', scenario: def.name });
       } catch {
         sendJson(res, 400, { error: 'Invalid JSON body' });
@@ -588,7 +717,7 @@ export class SimulatorServer {
     res: http.ServerResponse,
     name: string
   ): void {
-    readBody(req, (body) => {
+    readBody(req, async (body) => {
       try {
         if (!this.customScenarios.has(name)) {
           sendJson(res, 404, { error: `Custom scenario "${name}" not found` });
@@ -599,6 +728,10 @@ export class SimulatorServer {
         this.customScenarios.set(name, def);
         this.scenarioEngine.unregister(name);
         this.scenarioEngine.register(createCustomScenario(def));
+        if (hasDb()) {
+          try { await dbUpdateCustomScenario(def); }
+          catch (err) { console.warn('[DB] Failed to persist custom scenario update:', err); }
+        }
         sendJson(res, 200, { status: 'ok', scenario: name });
       } catch {
         sendJson(res, 400, { error: 'Invalid JSON body' });
@@ -613,6 +746,9 @@ export class SimulatorServer {
     }
     this.customScenarios.delete(name);
     this.scenarioEngine.unregister(name);
+    if (hasDb()) {
+      dbDeleteCustomScenario(name).catch((err) => console.warn('[DB] Failed to persist scenario delete:', err));
+    }
     sendJson(res, 200, { status: 'ok', deleted: name });
   }
 }

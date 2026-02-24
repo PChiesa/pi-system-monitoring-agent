@@ -1,4 +1,5 @@
 import { TagRegistry } from './tag-registry.js';
+import { DEFAULT_TAG_PROFILES } from './db/defaults.js';
 
 export type ValueType = 'number' | 'boolean' | 'string';
 
@@ -23,35 +24,6 @@ export interface PIStreamValue {
   Substituted: boolean;
   Annotated: boolean;
 }
-
-/** Per-tag nominal values, noise profiles, and clamp ranges. */
-const TAG_PROFILES: Record<string, TagProfile> = {
-  'BOP.ACC.PRESS.SYS':          { nominal: 3000,  sigma: 15,  min: 0 },
-  'BOP.ACC.PRESS.PRCHG':        { nominal: 1000,  sigma: 5,   min: 0 },
-  'BOP.ACC.HYD.LEVEL':          { nominal: 80,    sigma: 2,   min: 0, max: 100 },
-  'BOP.ACC.HYD.TEMP':           { nominal: 120,   sigma: 3,   min: 50 },
-  'BOP.ANN01.PRESS.CL':         { nominal: 750,   sigma: 10,  min: 0 },
-  'BOP.ANN01.POS':              { nominal: 0,     sigma: 0,   min: 0, max: 100, discrete: true },
-  'BOP.ANN01.CLOSETIME':        { nominal: 18,    sigma: 1.5, min: 0 },
-  'BOP.RAM.PIPE01.POS':         { nominal: 0,     sigma: 0,   min: 0, max: 100, discrete: true },
-  'BOP.RAM.PIPE01.CLOSETIME':   { nominal: 15,    sigma: 1.0, min: 0 },
-  'BOP.RAM.BSR01.POS':          { nominal: 0,     sigma: 0,   min: 0, max: 100, discrete: true },
-  'BOP.RAM.BSR01.CLOSETIME':    { nominal: 16,    sigma: 1.2, min: 0 },
-  'BOP.MAN.PRESS.REG':          { nominal: 1500,  sigma: 8,   min: 0 },
-  'BOP.CHOKE.PRESS':            { nominal: 200,   sigma: 15,  min: 0 },
-  'BOP.KILL.PRESS':             { nominal: 200,   sigma: 15,  min: 0 },
-  'BOP.CTRL.POD.BLUE.STATUS':   { nominal: 1,     sigma: 0,   min: 0, max: 1, discrete: true },
-  'BOP.CTRL.POD.YELLOW.STATUS': { nominal: 1,     sigma: 0,   min: 0, max: 1, discrete: true },
-  'BOP.CTRL.BATT.BLUE.VOLTS':   { nominal: 12.0,  sigma: 0.1, min: 0 },
-  'BOP.CTRL.BATT.YELLOW.VOLTS': { nominal: 12.0,  sigma: 0.1, min: 0 },
-  'WELL.PRESS.CASING':          { nominal: 500,   sigma: 20,  min: 0 },
-  'WELL.PRESS.SPP':             { nominal: 3200,  sigma: 50,  min: 0 },
-  'WELL.FLOW.IN':               { nominal: 600,   sigma: 10,  min: 0 },
-  'WELL.FLOW.OUT':              { nominal: 600,   sigma: 10,  min: 0 },
-  'WELL.FLOW.DELTA':            { nominal: 0,     sigma: 1.5 },
-  'WELL.PIT.VOL.TOTAL':         { nominal: 800,   sigma: 0.5, min: 0 },
-  'WELL.PIT.VOL.DELTA':         { nominal: 0,     sigma: 0.3 },
-};
 
 /** Mean-reversion speed for the Ornstein-Uhlenbeck process. */
 const THETA = 0.1;
@@ -83,19 +55,39 @@ export class DataGenerator {
 
   constructor(registry: TagRegistry) {
     this.registry = registry;
+  }
 
-    for (const meta of registry.getAllMeta()) {
-      const profile = TAG_PROFILES[meta.tagName];
-      if (!profile) continue;
-
-      this.tags.set(meta.tagName, {
-        value: profile.nominal,
+  /** Load profiles from a pre-built map (DB or external source). */
+  loadProfiles(profiles: Map<string, TagProfile>): void {
+    for (const [tagName, profile] of profiles) {
+      if (this.tags.has(tagName)) continue;
+      const vt = profile.valueType ?? 'number';
+      let initialValue: number | boolean | string;
+      if (vt === 'boolean') {
+        initialValue = profile.booleanDefault ?? false;
+      } else if (vt === 'string') {
+        initialValue = profile.stringDefault ?? '';
+      } else {
+        initialValue = profile.nominal;
+      }
+      this.tags.set(tagName, {
+        value: initialValue,
         profile,
         modifier: null,
         override: null,
       });
-      this.history.set(meta.tagName, []);
+      this.history.set(tagName, []);
     }
+  }
+
+  /** Load profiles from the built-in defaults (non-DB mode). */
+  loadFromDefaults(): void {
+    const profiles = new Map<string, TagProfile>();
+    for (const meta of this.registry.getAllMeta()) {
+      const profile = DEFAULT_TAG_PROFILES[meta.tagName];
+      if (profile) profiles.set(meta.tagName, profile);
+    }
+    this.loadProfiles(profiles);
   }
 
   /** Register a new tag at runtime (for dynamically created tags). */
