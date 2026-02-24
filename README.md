@@ -110,14 +110,15 @@ The simulator ships with a React-based configuration UI accessible at `https://l
 - **Tag Configuration** — edit tag profiles (nominal, sigma, min/max, discrete) at runtime; override individual tags to fixed values
 - **Scenario Builder** — create custom fault scenarios with per-tag modifiers, curve types (linear, step, exponential), and visual preview
 - **Asset Framework** — browse and edit the AF element hierarchy, map attributes to PI tags, view live attribute values
+- **AF Import** — connect to a real PI Web API server, browse its AF hierarchy, and import a subtree (elements, attributes, and optionally PI tags with current values) into the simulator with real-time NDJSON streaming progress
 
 To build the UI (required once, or after UI changes):
 
 ```bash
-cd simulator/ui && npm install && npm run build
+cd simulator/ui && bun install && bun run build
 ```
 
-The built UI is served as static files by the simulator at `/ui/`. During development, you can run the Vite dev server separately (`cd simulator/ui && npm run dev`) — it proxies API requests to the simulator.
+The built UI is served as static files by the simulator at `/ui/`. During development, you can run the Vite dev server separately (`cd simulator/ui && bun run dev`) — it proxies API requests to the simulator.
 
 ### CLI options
 
@@ -194,6 +195,11 @@ curl -k -X DELETE https://localhost:8443/admin/scenarios/custom/my-leak
 curl -k https://localhost:8443/piwebapi/assetdatabases
 curl -k https://localhost:8443/piwebapi/elements/{webId}/attributes
 curl -k https://localhost:8443/piwebapi/attributes/{webId}/value
+
+# AF Import (from remote PI Web API — all POST, NDJSON streaming for execute)
+curl -k -X POST https://localhost:8443/admin/import/test-connection -d '{"serverUrl":"https://piserver","username":"user","password":"pass"}'
+curl -k -X POST https://localhost:8443/admin/import/browse/servers -d '{"serverUrl":"https://piserver","username":"user","password":"pass"}'
+curl -k -X POST https://localhost:8443/admin/import/execute -d '{"connection":{...},"remoteElementWebId":"...","targetParentWebId":"...","importTags":true}'
 ```
 
 ## Monitored Tags
@@ -233,6 +239,7 @@ simulator/
   ws-handler.ts         # WebSocket channel handler (streamsets/channel, 1 Hz push)
   af-model.ts           # PI AF hierarchy — in-memory database/element/attribute model with BOP seed data
   af-handler.ts         # PI Web API AF endpoint handlers (assetdatabases, elements, attributes)
+  import-handler.ts     # AF import from remote PI Web API — server-side proxy, NDJSON streaming, tag creation
   custom-scenario.ts    # Custom scenario builder — creates Scenario objects from JSON definitions
   utils.ts              # Shared utilities (sendJson, readBody)
   tls.ts                # Self-signed TLS certificate generation
@@ -246,14 +253,14 @@ simulator/
   ui/                   # React configuration UI (separate Vite project)
     src/
       App.tsx           # Router: Dashboard | Tags | Scenarios | Asset Framework
-      pages/            # Dashboard, tag config, scenario builder, AF browser
+      pages/            # Dashboard, tag config, scenario builder, AF browser, AF import dialog
       hooks/            # useLiveValues (WebSocket), useTags, useStatus
       lib/api.ts        # Typed fetch wrapper for admin + PI Web API endpoints
       components/ui/    # shadcn/ui primitives (button, card, dialog, table, etc.)
 
 tests/
   shared-mocks.ts       # Shared mock factories (Bun #12823 workaround)
-  *.test.ts             # One test file per source module (8 suites)
+  *.test.ts             # One test file per source module (11 suites, ~160 tests)
 ```
 
 ## Testing

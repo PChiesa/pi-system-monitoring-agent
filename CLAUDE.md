@@ -43,6 +43,7 @@ simulator/
   ws-handler.ts         # WebSocket channel handler (streamsets/channel, 1 Hz push to clients)
   af-model.ts           # PI AF hierarchy — in-memory database/element/attribute model with BOP seed data
   af-handler.ts         # PI Web API AF endpoint handlers (assetdatabases, elements, attributes)
+  import-handler.ts     # AF import from remote PI Web API — server-side proxy, PI Point resolution, NDJSON streaming, tag creation
   custom-scenario.ts    # Custom scenario builder — creates Scenario objects from JSON definitions
   utils.ts              # Shared utilities (sendJson, readBody)
   tls.ts                # Self-signed TLS certificate generation (openssl)
@@ -56,14 +57,14 @@ simulator/
   ui/                   # React configuration UI (separate Vite project)
     src/
       App.tsx           # Router: Dashboard | Tags | Scenarios | Asset Framework
-      pages/            # Dashboard, tag config, scenario builder, AF browser
+      pages/            # Dashboard, tag config, scenario builder, AF browser, AF import dialog
       hooks/            # useLiveValues (WebSocket), useTags, useStatus
       lib/api.ts        # Typed fetch wrapper for admin + PI Web API endpoints
       components/ui/    # shadcn/ui primitives (button, card, dialog, table, etc.)
 
 tests/
   shared-mocks.ts       # Shared mock factories for cross-file mock compatibility (Bun #12823 workaround)
-  *.test.ts             # One test file per source module, 8 suites, ~80 tests
+  *.test.ts             # One test file per source module, 11 suites, ~160 tests
 ```
 
 ## Commands
@@ -149,8 +150,9 @@ The `simulator/` directory contains a standalone local PI Web API simulator for 
 - **1 Hz tick**: `SimulatorServer` runs a 1-second interval that calls `generator.tick()`, advancing all tag values. WebSocket clients receive updates at the same 1 Hz rate.
 - **History seeding**: On startup, 300 seconds of historical data are pre-generated so `/recorded` queries return data immediately.
 - **Asset Framework (AF)**: `af-model.ts` provides an in-memory AF hierarchy (databases → elements → attributes) seeded with the BOP equipment structure. `af-handler.ts` exposes PI Web API-compatible AF endpoints (`/piwebapi/assetdatabases`, `/elements`, `/attributes`). Attributes map to PI tags via `piPointName`, resolving live values from the `DataGenerator`.
-- **Admin API**: REST endpoints for status/scenarios (`/admin/status`, `/admin/scenarios`, `/admin/scenario`), tag profiles (`/admin/tags`, `/admin/tags/:tagName/profile`, `/admin/tags/:tagName/override`), custom scenarios (`/admin/scenarios/custom`), and AF CRUD (`/admin/af/*`).
-- **Configuration UI**: React SPA served at `/ui/` with dashboard (live values), tag configuration (profile editing, overrides), scenario builder (custom scenarios with curve preview), and AF browser (tree view, attribute management). Built separately via Vite (`simulator/ui/`).
+- **AF Import**: `import-handler.ts` provides a server-side proxy for importing AF hierarchies from a real PI Web API into the simulator. Multi-step flow: connect → browse asset servers/databases/elements → execute import. Uses NDJSON streaming (`application/x-ndjson`) for real-time progress on elements, attributes, and tags. PI Point attributes resolve their actual tag name via the attribute's `Links.Point` URL (not the parametric `ConfigString`). Optionally creates simulator tags with profiles derived from current values (nominal=value, min=50%, max=150%, rounded to 2 decimal places). The `importTags` flag controls whether tags are created or only AF structure is imported.
+- **Admin API**: REST endpoints for status/scenarios (`/admin/status`, `/admin/scenarios`, `/admin/scenario`), tag profiles (`/admin/tags`, `/admin/tags/:tagName/profile`, `/admin/tags/:tagName/override`), custom scenarios (`/admin/scenarios/custom`), AF CRUD (`/admin/af/*`), and AF import (`/admin/import/test-connection`, `/admin/import/browse/*`, `/admin/import/execute`).
+- **Configuration UI**: React SPA served at `/ui/` with dashboard (live values), tag configuration (profile editing, overrides), scenario builder (custom scenarios with curve preview), AF browser (tree view, attribute management), and AF import dialog (multi-step: connect → browse → configure → import with live progress). Built separately via Vite (`simulator/ui/`).
 - **Two modes**: Auto mode randomly triggers fault scenarios on a configurable interval. Manual mode (`--scenario=NAME`) runs a single scenario immediately.
 - **CORS**: Dev-friendly CORS headers allow the Vite dev server to proxy requests to the simulator.
 
