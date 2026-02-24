@@ -401,15 +401,16 @@ export class SimulatorServer {
   }
 
   private getAFElements(): AFElementInfo[] {
+    const buildTree = (elements: { webId: string; name: string; path: string; children: any[] }[]): AFElementInfo[] =>
+      elements.map(el => ({
+        webId: el.webId,
+        name: el.name,
+        path: el.path,
+        children: buildTree(el.children),
+      }));
     const result: AFElementInfo[] = [];
-    const visit = (elements: { webId: string; name: string; path: string; children: any[] }[]) => {
-      for (const el of elements) {
-        result.push({ webId: el.webId, name: el.name, path: el.path });
-        visit(el.children);
-      }
-    };
     for (const db of this.afModel.getDatabases()) {
-      visit(db.elements);
+      result.push(...buildTree(db.elements));
     }
     return result;
   }

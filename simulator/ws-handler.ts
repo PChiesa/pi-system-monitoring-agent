@@ -7,6 +7,8 @@ import { AFModel } from './af-model.js';
 export interface ChannelSession {
   ws: WebSocket;
   subscribedWebIds: string[];
+  /** Maps tag WebId → AF attribute name (only set for AF element subscriptions). */
+  attributeMap: Map<string, string>;
   interval: ReturnType<typeof setInterval> | null;
   heartbeatInterval: ReturnType<typeof setInterval> | null;
 }
@@ -80,6 +82,7 @@ export class WSHandler {
 
     // Determine subscribed WebIds based on endpoint variant
     let webIds: string[];
+    const attributeMap = new Map<string, string>();
 
     const pathMatch = url.pathname.match(/^\/piwebapi\/streamsets\/([^/]+)\/channel$/);
     if (pathMatch) {
@@ -90,31 +93,23 @@ export class WSHandler {
       if (meta) {
         webIds = [pathWebId];
       } else if (this.afModel) {
-        // Resolve AF element to its attribute PI tag WebIds
-        const attrs = this.afModel.getAttributes(pathWebId);
+        // Resolve AF element to its attribute PI tag WebIds (including child elements)
         const resolved: string[] = [];
-        for (const attr of attrs) {
-          if (attr.piPointName) {
-            const tagMeta = this.registry.getByTagName(attr.piPointName);
-            if (tagMeta) resolved.push(tagMeta.webId);
-          }
-        }
-        // If the element has child elements, also collect their attributes recursively
-        if (resolved.length === 0) {
-          const collectChildTags = (elementWebId: string) => {
-            const childAttrs = this.afModel!.getAttributes(elementWebId);
-            for (const a of childAttrs) {
-              if (a.piPointName) {
-                const tm = this.registry.getByTagName(a.piPointName);
-                if (tm) resolved.push(tm.webId);
+        const collectTags = (elementWebId: string) => {
+          for (const attr of this.afModel!.getAttributes(elementWebId)) {
+            if (attr.piPointName) {
+              const tagMeta = this.registry.getByTagName(attr.piPointName);
+              if (tagMeta) {
+                resolved.push(tagMeta.webId);
+                attributeMap.set(tagMeta.webId, attr.name);
               }
             }
-            for (const child of this.afModel!.getChildElements(elementWebId)) {
-              collectChildTags(child.webId);
-            }
-          };
-          collectChildTags(pathWebId);
-        }
+          }
+          for (const child of this.afModel!.getChildElements(elementWebId)) {
+            collectTags(child.webId);
+          }
+        };
+        collectTags(pathWebId);
         webIds = resolved.length > 0 ? resolved : this.registry.getAllWebIds();
       } else {
         webIds = this.registry.getAllWebIds();
@@ -134,6 +129,7 @@ export class WSHandler {
     const session: ChannelSession = {
       ws,
       subscribedWebIds: validWebIds,
+      attributeMap,
       interval: null,
       heartbeatInterval: null,
     };
@@ -171,7 +167,7 @@ export class WSHandler {
   }
 
   private sendSnapshot(session: ChannelSession, host: string): void {
-    const msg = this.buildMessage(session.subscribedWebIds, host);
+    const msg = this.buildMessage(session.subscribedWebIds, host, session.attributeMap);
     if (msg && session.ws.readyState === WebSocket.OPEN) {
       session.ws.send(JSON.stringify(msg));
     }
@@ -180,13 +176,13 @@ export class WSHandler {
   private sendUpdate(session: ChannelSession, host: string): void {
     // The server.ts tick() call already generated new values via generator.tick().
     // We just read the latest from the generator.
-    const msg = this.buildMessage(session.subscribedWebIds, host);
+    const msg = this.buildMessage(session.subscribedWebIds, host, session.attributeMap);
     if (msg && session.ws.readyState === WebSocket.OPEN) {
       session.ws.send(JSON.stringify(msg));
     }
   }
 
-  private buildMessage(webIds: string[], host: string): object | null {
+  private buildMessage(webIds: string[], host: string, attributeMap?: Map<string, string>): object | null {
     const items: Array<{
       WebId: string;
       Name: string;
@@ -194,6 +190,7 @@ export class WSHandler {
       Items: PIStreamValue[];
       UnitsAbbreviation: string;
       Links: { Self: string };
+      AttributeName?: string;
     }> = [];
 
     for (const webId of webIds) {
@@ -203,14 +200,17 @@ export class WSHandler {
       const sv = this.generator.getCurrentValue(meta.tagName);
       if (!sv) continue;
 
-      items.push({
+      const item: (typeof items)[number] = {
         WebId: webId,
         Name: meta.tagName,
         Path: meta.path,
         Items: [sv],
         UnitsAbbreviation: meta.unit,
         Links: { Self: `https://${host}/piwebapi/streams/${webId}/channel` },
-      });
+      };
+      const attrName = attributeMap?.get(webId);
+      if (attrName) item.AttributeName = attrName;
+      items.push(item);
     }
 
     if (items.length === 0) return null;

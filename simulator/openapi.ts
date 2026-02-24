@@ -977,6 +977,7 @@ export interface AFElementInfo {
   webId: string;
   name: string;
   path: string;
+  children: AFElementInfo[];
 }
 
 export function getWsTestHtml(port: number, tags: TagMeta[], elements: AFElementInfo[] = []): string {
@@ -1071,13 +1072,16 @@ export function getWsTestHtml(port: number, tags: TagMeta[], elements: AFElement
     .mode-toggle button { flex: 1; padding: 6px 8px; font-size: 12px; background: var(--surface);
       color: var(--text-dim); border: none; cursor: pointer; font-weight: 500; }
     .mode-toggle button.active { background: var(--accent); color: #fff; }
-    .element-picker { margin-bottom: 12px; }
-    .element-picker select { width: 100%; padding: 6px 8px; font-size: 12px;
-      background: var(--bg); color: var(--text); border: 1px solid var(--border);
-      border-radius: 6px; }
-    .element-picker option { padding: 4px 0; }
-    .element-picker .path-hint { font-size: 11px; color: var(--text-dim); margin-top: 4px;
-      word-break: break-all; }
+    .element-tree { margin-bottom: 8px; }
+    .tree-item { display: flex; align-items: center; padding: 3px 0; cursor: pointer;
+      font-size: 13px; border-radius: 4px; color: var(--text); }
+    .tree-item:hover { background: rgba(88,166,255,0.08); }
+    .tree-item.selected { background: rgba(88,166,255,0.18); color: var(--accent); }
+    .tree-toggle { width: 16px; text-align: center; font-size: 10px; color: var(--text-dim);
+      flex-shrink: 0; cursor: pointer; user-select: none; }
+    .tree-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .element-path-hint { font-size: 11px; color: var(--text-dim); margin-top: 4px;
+      padding: 0 4px; word-break: break-all; min-height: 16px; }
     .select-actions { margin-bottom: 12px; display: flex; gap: 8px; }
     .select-actions button { background: none; border: none; color: var(--accent);
       font-size: 12px; cursor: pointer; padding: 0; }
@@ -1134,13 +1138,9 @@ export function getWsTestHtml(port: number, tags: TagMeta[], elements: AFElement
 ${groupCheckboxes}
       </div>
       <div id="elementMode" style="display:none;">
-        <div class="element-picker">
-          <label style="font-size:12px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">AF Element</label>
-          <select id="elementSelect" onchange="onElementSelect()">
-            <option value="">— Select an element —</option>
-          </select>
-          <div id="elementPath" class="path-hint"></div>
-        </div>
+        <label style="font-size:12px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">AF Hierarchy</label>
+        <div id="elementTree" class="element-tree"></div>
+        <div id="elementPath" class="element-path-hint"></div>
         <div style="font-size:12px;color:var(--text-dim);margin-top:8px;">
           Connects via <code style="color:var(--accent);font-size:11px;">/streamsets/{webId}/channel</code> — subscribes to all tags under the selected element.
         </div>
@@ -1166,7 +1166,7 @@ ${groupCheckboxes}
         <div id="tab-values" class="tab-panel active">
           <div class="table-wrap">
             <table class="values-table">
-              <thead><tr><th>Tag</th><th>Value</th><th>Unit</th><th>Timestamp</th><th>Quality</th></tr></thead>
+              <thead><tr><th>Name</th><th>Value</th><th>Unit</th><th>Timestamp</th><th>Quality</th></tr></thead>
               <tbody id="valuesBody"></tbody>
             </table>
           </div>
@@ -1187,17 +1187,76 @@ let msgTotal = 0;
 let msgWindow = [];
 let connectionMode = 'tags'; // 'tags' or 'element'
 
-// Populate element dropdown
+let selectedElementWebId = '';
+let selectedElementName = '';
+
+// Render AF hierarchy tree
 (function() {
-  const sel = document.getElementById('elementSelect');
-  for (const el of ELEMENTS) {
-    const opt = document.createElement('option');
-    opt.value = el.webId;
-    opt.textContent = el.name;
-    opt.dataset.path = el.path;
-    sel.appendChild(opt);
+  function renderTree(elements, container, depth) {
+    for (const el of elements) {
+      const hasChildren = el.children && el.children.length > 0;
+      const row = document.createElement('div');
+      row.className = 'tree-item';
+      row.style.paddingLeft = (depth * 16 + 4) + 'px';
+      row.dataset.webId = el.webId;
+      row.dataset.path = el.path;
+
+      const toggle = document.createElement('span');
+      toggle.className = 'tree-toggle';
+      toggle.textContent = hasChildren ? '\\u25BE' : '';
+      row.appendChild(toggle);
+
+      const label = document.createElement('span');
+      label.className = 'tree-label';
+      label.textContent = el.name;
+      row.appendChild(label);
+
+      container.appendChild(row);
+
+      let childContainer = null;
+      if (hasChildren) {
+        childContainer = document.createElement('div');
+        childContainer.className = 'tree-children';
+        container.appendChild(childContainer);
+        renderTree(el.children, childContainer, depth + 1);
+      }
+
+      row.addEventListener('click', () => selectElement(el.webId, el.name, el.path));
+      if (hasChildren) {
+        toggle.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const collapsed = childContainer.style.display === 'none';
+          childContainer.style.display = collapsed ? '' : 'none';
+          toggle.textContent = collapsed ? '\\u25BE' : '\\u25B8';
+        });
+      }
+    }
   }
+  renderTree(ELEMENTS, document.getElementById('elementTree'), 0);
 })();
+
+function selectElement(webId, name, path) {
+  if (webId === selectedElementWebId) return;
+  // Highlight selected item
+  document.querySelectorAll('#elementTree .tree-item').forEach(el => el.classList.remove('selected'));
+  const item = document.querySelector('#elementTree .tree-item[data-web-id="' + webId + '"]');
+  if (item) item.classList.add('selected');
+  selectedElementWebId = webId;
+  selectedElementName = name;
+  document.getElementById('elementPath').textContent = path;
+  // Clear live values
+  clearValues();
+  // Auto-reconnect if currently connected
+  if (ws && ws.readyState <= 1) {
+    disconnect();
+    setTimeout(connect, 100);
+  }
+}
+
+function clearValues() {
+  valueRows.clear();
+  document.getElementById('valuesBody').innerHTML = '';
+}
 
 function setMode(mode) {
   connectionMode = mode;
@@ -1205,12 +1264,6 @@ function setMode(mode) {
   document.getElementById('modeElementBtn').className = mode === 'element' ? 'active' : '';
   document.getElementById('tagMode').style.display = mode === 'tags' ? '' : 'none';
   document.getElementById('elementMode').style.display = mode === 'element' ? '' : 'none';
-}
-
-function onElementSelect() {
-  const sel = document.getElementById('elementSelect');
-  const opt = sel.options[sel.selectedIndex];
-  document.getElementById('elementPath').textContent = opt.dataset.path || '';
 }
 
 // Group toggles
@@ -1246,11 +1299,9 @@ function connect() {
   let label;
 
   if (connectionMode === 'element') {
-    const elWebId = document.getElementById('elementSelect').value;
-    if (!elWebId) { alert('Select an AF element.'); return; }
-    const elName = document.getElementById('elementSelect').options[document.getElementById('elementSelect').selectedIndex].textContent;
-    url = 'wss://localhost:' + PORT + '/piwebapi/streamsets/' + encodeURIComponent(elWebId) + '/channel?includeInitialValues=true';
-    label = 'element: ' + elName;
+    if (!selectedElementWebId) { alert('Select an AF element.'); return; }
+    url = 'wss://localhost:' + PORT + '/piwebapi/streamsets/' + encodeURIComponent(selectedElementWebId) + '/channel?includeInitialValues=true';
+    label = 'element: ' + selectedElementName;
   } else {
     const webIds = getSelectedWebIds();
     if (webIds.length === 0) { alert('Select at least one tag.'); return; }
@@ -1278,10 +1329,11 @@ function connect() {
       if (msg.Items) {
         for (const stream of msg.Items) {
           const tagName = stream.Name;
+          const attrName = stream.AttributeName || null;
           const sv = stream.Items && stream.Items[0];
           if (!sv) continue;
-          updateValue(tagName, sv, stream.WebId);
-          addLogValue(tagName, sv);
+          updateValue(tagName, sv, stream.WebId, attrName);
+          addLogValue(tagName, sv, attrName);
         }
       }
     } catch (e) {
@@ -1310,12 +1362,15 @@ function disconnect() {
 
 // Live values table
 const valueRows = new Map();
-function updateValue(tagName, sv, webId) {
+function updateValue(tagName, sv, webId, attrName) {
   let row = valueRows.get(tagName);
   if (!row) {
     const tbody = document.getElementById('valuesBody');
     row = document.createElement('tr');
-    row.innerHTML = '<td>' + tagName + '</td><td class="val"></td><td class="unit-cell"></td><td class="ts"></td><td class="q"></td>';
+    const nameHtml = attrName
+      ? attrName + '<br><span style="font-size:11px;color:var(--text-dim)">' + tagName + '</span>'
+      : tagName;
+    row.innerHTML = '<td class="name-cell">' + nameHtml + '</td><td class="val"></td><td class="unit-cell"></td><td class="ts"></td><td class="q"></td>';
     const meta = TAGS.find(t => t.tagName === tagName);
     row.querySelector('.unit-cell').textContent = meta ? meta.unit : '';
     tbody.appendChild(row);
@@ -1335,10 +1390,11 @@ function updateValue(tagName, sv, webId) {
 const logPane = document.getElementById('logPane');
 const MAX_LOG = 500;
 let logCount = 0;
-function addLogValue(tagName, sv) {
+function addLogValue(tagName, sv, attrName) {
   const val = typeof sv.Value === 'number' ? sv.Value.toFixed(2) : String(sv.Value);
   const ts = new Date(sv.Timestamp).toLocaleTimeString();
-  appendLog('<span class="log-ts">' + ts + '</span><span class="log-tag">' + tagName + '</span> = <span class="log-val">' + val + '</span>');
+  const label = attrName ? attrName + ' <span style="color:var(--text-dim)">(' + tagName + ')</span>' : tagName;
+  appendLog('<span class="log-ts">' + ts + '</span><span class="log-tag">' + label + '</span> = <span class="log-val">' + val + '</span>');
 }
 function addLogSys(text) {
   const ts = new Date().toLocaleTimeString();
