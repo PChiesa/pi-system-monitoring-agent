@@ -15,6 +15,7 @@ import {
 } from './custom-scenario.js';
 import { AFModel } from './af-model.js';
 import { createAFHandler } from './af-handler.js';
+import { createImportHandler } from './import-handler.js';
 import { sendJson, readBody } from './utils.js';
 
 export interface SimulatorConfig {
@@ -34,6 +35,7 @@ export class SimulatorServer {
   private restHandler: ReturnType<typeof createRestHandler>;
   readonly afModel: AFModel;
   private afHandler: ReturnType<typeof createAFHandler>;
+  private importHandler: ReturnType<typeof createImportHandler>;
   private config: SimulatorConfig;
   private startTime = Date.now();
   private customScenarios = new Map<string, CustomScenarioDefinition>();
@@ -49,6 +51,7 @@ export class SimulatorServer {
     this.afModel = new AFModel(this.registry);
     this.wsHandler.setAFModel(this.afModel);
     this.afHandler = createAFHandler(this.afModel, this.generator);
+    this.importHandler = createImportHandler(this.afModel, this.registry, this.generator);
   }
 
   async start(): Promise<void> {
@@ -142,6 +145,9 @@ export class SimulatorServer {
 
     // PI Web API AF endpoints
     if (this.afHandler(req, res)) return;
+
+    // AF import from remote PI Web API
+    if (this.importHandler(req, res)) return;
 
     // Admin endpoints
     const url = new URL(req.url!, `https://${req.headers.host || 'localhost'}`);

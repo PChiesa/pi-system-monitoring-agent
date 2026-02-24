@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { ImportAFDialog } from './import-af-dialog';
 
 interface TreeNode {
   element: AFElementResp;
@@ -56,6 +57,7 @@ export function AFPage() {
   const [elementDetail, setElementDetail] = useState<AFElementResp | null>(null);
   const [showCreateElement, setShowCreateElement] = useState(false);
   const [showCreateAttr, setShowCreateAttr] = useState(false);
+  const [showImportDialog, setShowImportDialog] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [newAttrName, setNewAttrName] = useState('');
@@ -143,7 +145,12 @@ export function AFPage() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-2xl font-bold">Asset Framework</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold">Asset Framework</h2>
+        <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)}>
+          Import from PI Web API
+        </Button>
+      </div>
 
       {databases.length > 1 && (
         <Select value={selectedDb} onValueChange={setSelectedDb}>
@@ -291,6 +298,14 @@ export function AFPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Import from PI Web API dialog */}
+      <ImportAFDialog
+        open={showImportDialog}
+        onOpenChange={setShowImportDialog}
+        targetParentWebId={selectedElement || selectedDb}
+        onImportComplete={() => { if (selectedDb) loadTree(selectedDb); }}
+      />
     </div>
   );
 }
