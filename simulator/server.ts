@@ -44,9 +44,11 @@ export class SimulatorServer {
   private startTime = Date.now();
   private customScenarios = new Map<string, CustomScenarioDefinition>();
   private customTagGroups = new Map<string, string>();
+  private corsAllowedOrigins: string[];
 
   constructor(config: SimulatorConfig) {
     this.config = config;
+    this.corsAllowedOrigins = buildCorsAllowlist(config.port);
     this.registry = new TagRegistry();
     this.generator = new DataGenerator(this.registry);
     this.scenarioEngine = new ScenarioEngine(this.generator, config.mode);
@@ -177,8 +179,11 @@ export class SimulatorServer {
   }
 
   private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
-    // CORS headers for dev (Vite dev server on a different port)
-    if (req.headers.origin) {
+    // Security headers
+    setSecurityHeaders(res);
+
+    // CORS — only allow configured origins (not arbitrary reflection)
+    if (req.headers.origin && this.corsAllowedOrigins.includes(req.headers.origin)) {
       res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -280,7 +285,7 @@ export class SimulatorServer {
     }
 
     if (url.pathname === '/admin/af/databases' && req.method === 'POST') {
-      readBody(req, async (body) => {
+      readBody(req, res, async (body) => {
         try {
           const { name, description } = JSON.parse(body);
           if (!name) { sendJson(res, 400, { error: 'Missing "name"' }); return; }
@@ -298,7 +303,7 @@ export class SimulatorServer {
     }
 
     if (url.pathname === '/admin/af/elements' && req.method === 'POST') {
-      readBody(req, async (body) => {
+      readBody(req, res, async (body) => {
         try {
           const { parentWebId, name, description } = JSON.parse(body);
           if (!parentWebId || !name) {
@@ -336,7 +341,7 @@ export class SimulatorServer {
     if (afElementMatch) {
       const webId = decodeURIComponent(afElementMatch[1]!);
       if (req.method === 'PUT') {
-        readBody(req, async (body) => {
+        readBody(req, res, async (body) => {
           try {
             const updates = JSON.parse(body);
             const ok = this.afModel.updateElement(webId, updates);
@@ -367,7 +372,7 @@ export class SimulatorServer {
     }
 
     if (url.pathname === '/admin/af/attributes' && req.method === 'POST') {
-      readBody(req, async (body) => {
+      readBody(req, res, async (body) => {
         try {
           const { elementWebId, name, type, defaultUOM, piPointName, description } = JSON.parse(body);
           if (!elementWebId || !name) {
@@ -399,7 +404,7 @@ export class SimulatorServer {
     if (afAttributeMatch) {
       const webId = decodeURIComponent(afAttributeMatch[1]!);
       if (req.method === 'PUT') {
-        readBody(req, async (body) => {
+        readBody(req, res, async (body) => {
           try {
             const updates = JSON.parse(body);
             const ok = this.afModel.updateAttribute(webId, updates);
@@ -545,7 +550,7 @@ export class SimulatorServer {
   }
 
   private handleAdminSetScenario(req: http.IncomingMessage, res: http.ServerResponse): void {
-    readBody(req, (body) => {
+    readBody(req, res, (body) => {
       try {
         const { name } = JSON.parse(body);
         if (!name) {
@@ -587,7 +592,7 @@ export class SimulatorServer {
     res: http.ServerResponse,
     tagName: string
   ): void {
-    readBody(req, async (body) => {
+    readBody(req, res, async (body) => {
       try {
         const updates = JSON.parse(body);
         const ok = this.generator.updateProfile(tagName, updates);
@@ -611,7 +616,7 @@ export class SimulatorServer {
     res: http.ServerResponse,
     tagName: string
   ): void {
-    readBody(req, (body) => {
+    readBody(req, res, (body) => {
       try {
         const { value } = JSON.parse(body);
         if (value === undefined || value === null) {
@@ -654,7 +659,7 @@ export class SimulatorServer {
   }
 
   private handleAdminCreateTag(req: http.IncomingMessage, res: http.ServerResponse): void {
-    readBody(req, async (body) => {
+    readBody(req, res, async (body) => {
       try {
         const { tagName, unit, group, profile } = JSON.parse(body);
         if (!tagName || !profile) {
@@ -692,7 +697,7 @@ export class SimulatorServer {
   }
 
   private handleCreateCustomScenario(req: http.IncomingMessage, res: http.ServerResponse): void {
-    readBody(req, async (body) => {
+    readBody(req, res, async (body) => {
       try {
         const def = JSON.parse(body) as CustomScenarioDefinition;
         if (!def.name || !def.durationMs || !Array.isArray(def.modifiers)) {
@@ -717,7 +722,7 @@ export class SimulatorServer {
     res: http.ServerResponse,
     name: string
   ): void {
-    readBody(req, async (body) => {
+    readBody(req, res, async (body) => {
       try {
         if (!this.customScenarios.has(name)) {
           sendJson(res, 404, { error: `Custom scenario "${name}" not found` });
@@ -777,4 +782,29 @@ function getTagGroup(tagName: string): string {
   if (tagName.startsWith('BOP.CTRL.')) return 'Control';
   if (tagName.startsWith('WELL.')) return 'Wellbore';
   return 'Other';
+}
+
+function setSecurityHeaders(res: http.ServerResponse): void {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+  );
+}
+
+function buildCorsAllowlist(port: number): string[] {
+  const envOrigins = process.env.SIM_CORS_ORIGINS;
+  if (envOrigins) {
+    return envOrigins.split(',').map((o) => o.trim()).filter(Boolean);
+  }
+  // Default: simulator itself + common Vite dev server ports
+  return [
+    `https://localhost:${port}`,
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:3000',
+  ];
 }

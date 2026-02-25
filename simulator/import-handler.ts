@@ -599,7 +599,7 @@ export function createImportHandler(
 
     // POST /admin/import/test-connection
     if (path === '/admin/import/test-connection') {
-      readBody(req, async (raw) => {
+      readBody(req, res, async (raw) => {
         try {
           const body = JSON.parse(raw);
           const conn = parseConnection(body);
@@ -626,7 +626,7 @@ export function createImportHandler(
 
     // POST /admin/import/browse/servers
     if (path === '/admin/import/browse/servers') {
-      readBody(req, async (raw) => {
+      readBody(req, res, async (raw) => {
         try {
           const body = JSON.parse(raw);
           const conn = parseConnection(body);
@@ -647,7 +647,7 @@ export function createImportHandler(
 
     // POST /admin/import/browse/databases
     if (path === '/admin/import/browse/databases') {
-      readBody(req, async (raw) => {
+      readBody(req, res, async (raw) => {
         try {
           const body = JSON.parse(raw);
           const conn = parseConnection(body);
@@ -673,7 +673,7 @@ export function createImportHandler(
 
     // POST /admin/import/browse/elements
     if (path === '/admin/import/browse/elements') {
-      readBody(req, async (raw) => {
+      readBody(req, res, async (raw) => {
         try {
           const body = JSON.parse(raw);
           const conn = parseConnection(body);
@@ -706,7 +706,7 @@ export function createImportHandler(
         sendJson(res, 409, { error: 'An import is already in progress' });
         return true;
       }
-      readBody(req, async (raw) => {
+      readBody(req, res, async (raw) => {
         try {
           const body = JSON.parse(raw) as ImportRequest;
           const conn = parseConnection(body.connection);
