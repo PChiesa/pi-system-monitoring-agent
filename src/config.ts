@@ -1,10 +1,26 @@
 import 'dotenv/config';
+import { z } from 'zod';
+
+const piEnvSchema = z.object({
+  PI_SERVER: z.string().min(1, 'PI_SERVER is required'),
+  PI_DATA_ARCHIVE: z.string().min(1, 'PI_DATA_ARCHIVE is required'),
+  PI_USERNAME: z.string().min(1, 'PI_USERNAME is required'),
+  PI_PASSWORD: z.string().min(1, 'PI_PASSWORD is required'),
+});
+
+const piEnv = piEnvSchema.parse({
+  PI_SERVER: process.env.PI_SERVER,
+  PI_DATA_ARCHIVE: process.env.PI_DATA_ARCHIVE,
+  PI_USERNAME: process.env.PI_USERNAME,
+  PI_PASSWORD: process.env.PI_PASSWORD,
+});
 
 export const PI_CONFIG = {
-  server: process.env.PI_SERVER!,
-  dataArchive: process.env.PI_DATA_ARCHIVE!,
-  username: process.env.PI_USERNAME!,
-  password: process.env.PI_PASSWORD!,
+  server: piEnv.PI_SERVER,
+  dataArchive: piEnv.PI_DATA_ARCHIVE,
+  username: piEnv.PI_USERNAME,
+  password: piEnv.PI_PASSWORD,
+  rejectUnauthorized: process.env.PI_REJECT_UNAUTHORIZED !== 'false',
 };
 
 export const BOP_CONFIG = {

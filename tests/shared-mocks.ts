@@ -16,6 +16,7 @@ export const MOCK_PI_CONFIG = {
   dataArchive: 'test',
   username: 'test',
   password: 'test',
+  rejectUnauthorized: true,
 };
 
 export const MOCK_BOP_CONFIG = {

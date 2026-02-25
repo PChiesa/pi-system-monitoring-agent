@@ -13,6 +13,7 @@ interface PIConnectionConfig {
   serverUrl: string;
   username: string;
   password: string;
+  rejectUnauthorized?: boolean;
 }
 
 interface RemoteAssetServer {
@@ -92,6 +93,7 @@ class PIRemoteError extends Error {
 class PIRemoteClient {
   private baseUrl: string;
   private authHeader: string;
+  private rejectUnauthorized: boolean;
 
   constructor(config: PIConnectionConfig) {
     let url = config.serverUrl.replace(/\/+$/, '');
@@ -99,6 +101,7 @@ class PIRemoteClient {
       url += '/piwebapi';
     }
     this.baseUrl = url;
+    this.rejectUnauthorized = config.rejectUnauthorized ?? true;
     this.authHeader =
       'Basic ' + Buffer.from(`${config.username}:${config.password}`).toString('base64');
   }
@@ -113,7 +116,7 @@ class PIRemoteClient {
           'X-Requested-With': 'XMLHttpRequest',
         },
         // @ts-expect-error — Bun supports rejectUnauthorized on fetch
-        tls: { rejectUnauthorized: false },
+        tls: { rejectUnauthorized: this.rejectUnauthorized },
       });
     } catch (err) {
       // Network-level failure (DNS, connection refused, TLS)
@@ -192,7 +195,7 @@ class PIRemoteClient {
           'X-Requested-With': 'XMLHttpRequest',
         },
         // @ts-expect-error — Bun supports rejectUnauthorized on fetch
-        tls: { rejectUnauthorized: false },
+        tls: { rejectUnauthorized: this.rejectUnauthorized },
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

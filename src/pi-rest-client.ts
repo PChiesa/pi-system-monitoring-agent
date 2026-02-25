@@ -4,12 +4,12 @@ import https from 'https';
 export class PIRestClient {
   private client: AxiosInstance;
 
-  constructor(server: string, username: string, password: string) {
+  constructor(server: string, username: string, password: string, rejectUnauthorized = true) {
     this.client = axios.create({
       baseURL: `https://${server}/piwebapi`,
       auth: { username, password },
       headers: { 'X-Requested-With': 'XMLHttpRequest' },
-      httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+      httpsAgent: new https.Agent({ rejectUnauthorized }),
     });
   }
 
