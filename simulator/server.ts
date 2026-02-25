@@ -513,9 +513,9 @@ export class SimulatorServer {
     const uiDistDir = path.join(import.meta.dir, 'ui', 'dist');
     let filePath = pathname.replace(/^\/ui\/?/, '') || 'index.html';
 
-    const fullPath = path.join(uiDistDir, filePath);
+    const fullPath = path.resolve(uiDistDir, filePath);
 
-    // Prevent path traversal
+    // Prevent path traversal (resolve normalizes '..' segments before the check)
     if (!fullPath.startsWith(uiDistDir)) {
       sendJson(res, 403, { Message: 'Forbidden' });
       return;

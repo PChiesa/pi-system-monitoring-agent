@@ -7,6 +7,7 @@ import { hasDb } from './db/connection.js';
 import { insertTag } from './db/tag-repository.js';
 import { insertDatabase as dbInsertDatabase, insertElement as dbInsertElement, insertAttribute as dbInsertAttribute } from './db/af-repository.js';
 import { validateServerUrl, validateUrlMatchesHost } from './url-validator.js';
+import { sanitizeErrorMessage } from './error-sanitizer.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -617,7 +618,7 @@ export function createImportHandler(
         } catch (err) {
           sendJson(res, 200, {
             connected: false,
-            error: err instanceof Error ? err.message : String(err),
+            error: sanitizeErrorMessage(err, 'Connection failed'),
           });
         }
       });
@@ -639,7 +640,7 @@ export function createImportHandler(
           sendJson(res, 200, { servers });
         } catch (err) {
           const status = err instanceof PIRemoteError ? err.statusCode : 500;
-          sendJson(res, status, { error: err instanceof Error ? err.message : String(err) });
+          sendJson(res, status, { error: sanitizeErrorMessage(err) });
         }
       });
       return true;
@@ -665,7 +666,7 @@ export function createImportHandler(
           sendJson(res, 200, { databases });
         } catch (err) {
           const status = err instanceof PIRemoteError ? err.statusCode : 500;
-          sendJson(res, status, { error: err instanceof Error ? err.message : String(err) });
+          sendJson(res, status, { error: sanitizeErrorMessage(err) });
         }
       });
       return true;
@@ -694,7 +695,7 @@ export function createImportHandler(
           sendJson(res, 200, { elements });
         } catch (err) {
           const status = err instanceof PIRemoteError ? err.statusCode : 500;
-          sendJson(res, status, { error: err instanceof Error ? err.message : String(err) });
+          sendJson(res, status, { error: sanitizeErrorMessage(err) });
         }
       });
       return true;
@@ -811,12 +812,11 @@ export function createImportHandler(
           sendEvent(res, { type: 'result', ...result });
           res.end();
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.error(`[AF Import] Fatal error: ${msg}`);
+          console.error('[AF Import] Fatal error:', err);
           // If headers haven't been sent yet, send JSON error
           if (!res.headersSent) {
             const status = err instanceof PIRemoteError ? err.statusCode : 500;
-            sendJson(res, status, { error: msg });
+            sendJson(res, status, { error: sanitizeErrorMessage(err, 'Import failed') });
           } else {
             // Stream already started — send error event and close
             sendEvent(res, { type: 'error', error: msg });
