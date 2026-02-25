@@ -17,6 +17,19 @@ import { AFModel } from './af-model.js';
 import { createAFHandler } from './af-handler.js';
 import { createImportHandler } from './import-handler.js';
 import { sendJson, readBody } from './utils.js';
+import {
+  createTagSchema,
+  updateTagProfileSchema,
+  setOverrideSchema,
+  createAFDatabaseSchema,
+  createAFElementSchema,
+  createAFAttributeSchema,
+  updateAFElementSchema,
+  updateAFAttributeSchema,
+  customScenarioSchema,
+  activateScenarioSchema,
+  formatZodError,
+} from './validation.js';
 import { initDatabase, waitForDatabase, closeDatabase, hasDb } from './db/connection.js';
 import { loadAllTags, insertTag, updateTagProfile as dbUpdateTagProfile, updateTagGroup as dbUpdateTagGroup, deleteTag as dbDeleteTag, rowToProfile } from './db/tag-repository.js';
 import { loadAllDatabases, loadAllElements, loadAllAttributes, insertDatabase as dbInsertDatabase, insertElement as dbInsertElement, insertAttribute as dbInsertAttribute, updateElement as dbUpdateElement, updateAttribute as dbUpdateAttribute, deleteElement as dbDeleteElement, deleteAttribute as dbDeleteAttribute } from './db/af-repository.js';
@@ -287,8 +300,9 @@ export class SimulatorServer {
     if (url.pathname === '/admin/af/databases' && req.method === 'POST') {
       readBody(req, res, async (body) => {
         try {
-          const { name, description } = JSON.parse(body);
-          if (!name) { sendJson(res, 400, { error: 'Missing "name"' }); return; }
+          const parsed = createAFDatabaseSchema.safeParse(JSON.parse(body));
+          if (!parsed.success) { sendJson(res, 400, { error: formatZodError(parsed.error) }); return; }
+          const { name, description } = parsed.data;
           const db = this.afModel.createDatabase(name, description ?? '');
           if (hasDb()) {
             try {
@@ -305,11 +319,12 @@ export class SimulatorServer {
     if (url.pathname === '/admin/af/elements' && req.method === 'POST') {
       readBody(req, res, async (body) => {
         try {
-          const { parentWebId, name, description } = JSON.parse(body);
-          if (!parentWebId || !name) {
-            sendJson(res, 400, { error: 'Missing "parentWebId" or "name"' });
+          const parsed = createAFElementSchema.safeParse(JSON.parse(body));
+          if (!parsed.success) {
+            sendJson(res, 400, { error: formatZodError(parsed.error) });
             return;
           }
+          const { parentWebId, name, description } = parsed.data;
           const el = this.afModel.createElement(parentWebId, name, description ?? '');
           if (!el) { sendJson(res, 404, { error: 'Parent not found' }); return; }
           if (hasDb()) {
@@ -343,7 +358,9 @@ export class SimulatorServer {
       if (req.method === 'PUT') {
         readBody(req, res, async (body) => {
           try {
-            const updates = JSON.parse(body);
+            const parsed = updateAFElementSchema.safeParse(JSON.parse(body));
+            if (!parsed.success) { sendJson(res, 400, { error: formatZodError(parsed.error) }); return; }
+            const updates = parsed.data;
             const ok = this.afModel.updateElement(webId, updates);
             if (!ok) { sendJson(res, 404, { error: 'Element not found' }); return; }
             if (hasDb()) {
@@ -374,11 +391,12 @@ export class SimulatorServer {
     if (url.pathname === '/admin/af/attributes' && req.method === 'POST') {
       readBody(req, res, async (body) => {
         try {
-          const { elementWebId, name, type, defaultUOM, piPointName, description } = JSON.parse(body);
-          if (!elementWebId || !name) {
-            sendJson(res, 400, { error: 'Missing "elementWebId" or "name"' });
+          const parsed = createAFAttributeSchema.safeParse(JSON.parse(body));
+          if (!parsed.success) {
+            sendJson(res, 400, { error: formatZodError(parsed.error) });
             return;
           }
+          const { elementWebId, name, type, defaultUOM, piPointName, description } = parsed.data;
           const attr = this.afModel.createAttribute(
             elementWebId, name, type ?? 'Double', defaultUOM ?? '', piPointName ?? null, description ?? ''
           );
@@ -406,7 +424,9 @@ export class SimulatorServer {
       if (req.method === 'PUT') {
         readBody(req, res, async (body) => {
           try {
-            const updates = JSON.parse(body);
+            const parsed = updateAFAttributeSchema.safeParse(JSON.parse(body));
+            if (!parsed.success) { sendJson(res, 400, { error: formatZodError(parsed.error) }); return; }
+            const updates = parsed.data;
             const ok = this.afModel.updateAttribute(webId, updates);
             if (!ok) { sendJson(res, 404, { error: 'Attribute not found' }); return; }
             if (hasDb()) {
@@ -552,11 +572,12 @@ export class SimulatorServer {
   private handleAdminSetScenario(req: http.IncomingMessage, res: http.ServerResponse): void {
     readBody(req, res, (body) => {
       try {
-        const { name } = JSON.parse(body);
-        if (!name) {
-          sendJson(res, 400, { error: 'Missing "name" in request body' });
+        const parsed = activateScenarioSchema.safeParse(JSON.parse(body));
+        if (!parsed.success) {
+          sendJson(res, 400, { error: formatZodError(parsed.error) });
           return;
         }
+        const { name } = parsed.data;
         const ok = this.scenarioEngine.activate(name);
         if (!ok) {
           sendJson(res, 404, {
@@ -594,7 +615,12 @@ export class SimulatorServer {
   ): void {
     readBody(req, res, async (body) => {
       try {
-        const updates = JSON.parse(body);
+        const parsed = updateTagProfileSchema.safeParse(JSON.parse(body));
+        if (!parsed.success) {
+          sendJson(res, 400, { error: formatZodError(parsed.error) });
+          return;
+        }
+        const updates = parsed.data;
         const ok = this.generator.updateProfile(tagName, updates);
         if (!ok) {
           sendJson(res, 404, { error: `Unknown tag "${tagName}"` });
@@ -618,11 +644,12 @@ export class SimulatorServer {
   ): void {
     readBody(req, res, (body) => {
       try {
-        const { value } = JSON.parse(body);
-        if (value === undefined || value === null) {
-          sendJson(res, 400, { error: 'Missing "value" in request body' });
+        const parsed = setOverrideSchema.safeParse(JSON.parse(body));
+        if (!parsed.success) {
+          sendJson(res, 400, { error: formatZodError(parsed.error) });
           return;
         }
+        const { value } = parsed.data;
         const ok = this.generator.setOverride(tagName, value);
         if (!ok) {
           sendJson(res, 404, { error: `Unknown tag "${tagName}"` });
@@ -661,11 +688,12 @@ export class SimulatorServer {
   private handleAdminCreateTag(req: http.IncomingMessage, res: http.ServerResponse): void {
     readBody(req, res, async (body) => {
       try {
-        const { tagName, unit, group, profile } = JSON.parse(body);
-        if (!tagName || !profile) {
-          sendJson(res, 400, { error: 'Missing required fields: tagName, profile' });
+        const parsed = createTagSchema.safeParse(JSON.parse(body));
+        if (!parsed.success) {
+          sendJson(res, 400, { error: formatZodError(parsed.error) });
           return;
         }
+        const { tagName, unit, group, profile } = parsed.data;
         if (this.registry.getByTagName(tagName)) {
           sendJson(res, 409, { error: `Tag "${tagName}" already exists` });
           return;
@@ -699,11 +727,12 @@ export class SimulatorServer {
   private handleCreateCustomScenario(req: http.IncomingMessage, res: http.ServerResponse): void {
     readBody(req, res, async (body) => {
       try {
-        const def = JSON.parse(body) as CustomScenarioDefinition;
-        if (!def.name || !def.durationMs || !Array.isArray(def.modifiers)) {
-          sendJson(res, 400, { error: 'Missing required fields: name, durationMs, modifiers[]' });
+        const parsed = customScenarioSchema.safeParse(JSON.parse(body));
+        if (!parsed.success) {
+          sendJson(res, 400, { error: formatZodError(parsed.error) });
           return;
         }
+        const def = parsed.data as CustomScenarioDefinition;
         this.customScenarios.set(def.name, def);
         this.scenarioEngine.register(createCustomScenario(def));
         if (hasDb()) {
@@ -728,7 +757,12 @@ export class SimulatorServer {
           sendJson(res, 404, { error: `Custom scenario "${name}" not found` });
           return;
         }
-        const def = JSON.parse(body) as CustomScenarioDefinition;
+        const parsed = customScenarioSchema.safeParse(JSON.parse(body));
+        if (!parsed.success) {
+          sendJson(res, 400, { error: formatZodError(parsed.error) });
+          return;
+        }
+        const def = parsed.data as CustomScenarioDefinition;
         def.name = name; // Enforce URL name
         this.customScenarios.set(name, def);
         this.scenarioEngine.unregister(name);
