@@ -6,6 +6,7 @@ import { sendJson, readBody } from './utils.js';
 import { hasDb } from './db/connection.js';
 import { insertTag } from './db/tag-repository.js';
 import { insertDatabase as dbInsertDatabase, insertElement as dbInsertElement, insertAttribute as dbInsertAttribute } from './db/af-repository.js';
+import { validateServerUrl, validateUrlMatchesHost } from './url-validator.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -92,15 +93,20 @@ class PIRemoteError extends Error {
 
 class PIRemoteClient {
   private baseUrl: string;
+  private serverUrl: string;
   private authHeader: string;
   private rejectUnauthorized: boolean;
 
   constructor(config: PIConnectionConfig) {
+    // SSRF protection: validate the server URL before connecting
+    validateServerUrl(config.serverUrl, { allowHttp: true, allowPrivate: false });
+
     let url = config.serverUrl.replace(/\/+$/, '');
     if (!url.endsWith('/piwebapi')) {
       url += '/piwebapi';
     }
     this.baseUrl = url;
+    this.serverUrl = config.serverUrl;
     this.rejectUnauthorized = config.rejectUnauthorized ?? true;
     this.authHeader =
       'Basic ' + Buffer.from(`${config.username}:${config.password}`).toString('base64');
@@ -187,6 +193,9 @@ class PIRemoteClient {
 
   /** Follow an absolute Links.Point URL to get the PI Point object. */
   async getPointFromUrl(pointUrl: string): Promise<RemotePIPoint> {
+    // SSRF protection: ensure the URL points to the same server we connected to
+    validateUrlMatchesHost(pointUrl, this.serverUrl);
+
     let res: Response;
     try {
       res = await fetch(pointUrl, {
