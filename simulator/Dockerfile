@@ -5,10 +5,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl curl \
 
 WORKDIR /app
 
+# Install simulator dependencies (cached layer)
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 
+# Install UI dependencies (cached layer)
+COPY ui/package.json ui/bun.lock ui/
+RUN cd ui && bun install --frozen-lockfile
+
+# Copy all source
 COPY . .
+
+# Build UI with Bun
+RUN cd ui && bun run build
 
 ENV SIM_PORT=8443
 

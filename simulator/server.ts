@@ -229,12 +229,22 @@ export class SimulatorServer {
     }
 
     if ((url.pathname === '/docs' || url.pathname === '/docs/') && req.method === 'GET') {
+      // Docs page uses inline scripts and an external CDN script — relax CSP for this page
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'"
+      );
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(getExplorerHtml(this.config.port));
       return;
     }
 
     if ((url.pathname === '/ws-test' || url.pathname === '/ws-test/') && req.method === 'GET') {
+      // WS test page uses inline scripts and onclick handlers — relax CSP for this page
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss:"
+      );
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(getWsTestHtml(this.config.port, this.registry.getAllMeta(), this.getAFElements()));
       return;
