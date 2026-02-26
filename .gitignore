@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.js.map
+.claude/
 
 # Environment files (may contain credentials)
 .env

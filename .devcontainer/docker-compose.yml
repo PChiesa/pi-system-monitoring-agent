@@ -1,0 +1,47 @@
+services:
+  devcontainer:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    container_name: bop-devcontainer
+    userns_mode: "keep-id"
+    volumes:
+      - ..:/workspace:cached
+      - bun_cache:/home/bun/.bun/install/cache
+    environment:
+      # Simulator connection defaults (agent -> simulator, both run inside this container)
+      PI_SERVER: localhost:8443
+      PI_DATA_ARCHIVE: SIMULATOR
+      PI_USERNAME: sim
+      PI_PASSWORD: sim
+      PI_REJECT_UNAUTHORIZED: "false"
+      # PostgreSQL for simulator persistence (hostname = docker-compose service name)
+      DATABASE_URL: postgres://simulator:simulator@postgres:5432/pi_simulator
+      # Forward from host
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    command: sleep infinity
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: bop-dev-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pi_simulator
+      POSTGRES_USER: simulator
+      POSTGRES_PASSWORD: simulator
+    volumes:
+      - pg_dev_data:/var/lib/postgresql/data
+      - ../simulator/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U simulator -d pi_simulator"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
+
+volumes:
+  pg_dev_data:
+  bun_cache:
