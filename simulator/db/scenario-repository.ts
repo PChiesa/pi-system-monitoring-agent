@@ -1,5 +1,7 @@
 import { getDb } from './connection.js';
 import type { CustomScenarioDefinition } from '../custom-scenario.js';
+import { modifierDefinitionSchema } from '../validation.js';
+import { z } from 'zod';
 
 interface ScenarioRow {
   id: number;
@@ -9,12 +11,16 @@ interface ScenarioRow {
   modifiers: unknown;
 }
 
+const modifiersArraySchema = z.array(modifierDefinitionSchema);
+
 function rowToDefinition(row: ScenarioRow): CustomScenarioDefinition {
+  // Validate modifiers loaded from DB for defense-in-depth
+  const modifiers = modifiersArraySchema.parse(row.modifiers);
   return {
     name: row.name,
     description: row.description,
     durationMs: row.duration_ms,
-    modifiers: row.modifiers as CustomScenarioDefinition['modifiers'],
+    modifiers,
   };
 }
 

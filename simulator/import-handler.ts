@@ -6,6 +6,8 @@ import { sendJson, readBody } from './utils.js';
 import { hasDb } from './db/connection.js';
 import { insertTag } from './db/tag-repository.js';
 import { insertDatabase as dbInsertDatabase, insertElement as dbInsertElement, insertAttribute as dbInsertAttribute } from './db/af-repository.js';
+import { validateServerUrl, validateUrlMatchesHost } from './url-validator.js';
+import { sanitizeErrorMessage } from './error-sanitizer.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -13,6 +15,7 @@ interface PIConnectionConfig {
   serverUrl: string;
   username: string;
   password: string;
+  rejectUnauthorized?: boolean;
 }
 
 interface RemoteAssetServer {
@@ -91,14 +94,21 @@ class PIRemoteError extends Error {
 
 class PIRemoteClient {
   private baseUrl: string;
+  private serverUrl: string;
   private authHeader: string;
+  private rejectUnauthorized: boolean;
 
   constructor(config: PIConnectionConfig) {
+    // SSRF protection: validate the server URL before connecting
+    validateServerUrl(config.serverUrl, { allowHttp: true, allowPrivate: false });
+
     let url = config.serverUrl.replace(/\/+$/, '');
     if (!url.endsWith('/piwebapi')) {
       url += '/piwebapi';
     }
     this.baseUrl = url;
+    this.serverUrl = config.serverUrl;
+    this.rejectUnauthorized = config.rejectUnauthorized ?? true;
     this.authHeader =
       'Basic ' + Buffer.from(`${config.username}:${config.password}`).toString('base64');
   }
@@ -113,7 +123,7 @@ class PIRemoteClient {
           'X-Requested-With': 'XMLHttpRequest',
         },
         // @ts-expect-error — Bun supports rejectUnauthorized on fetch
-        tls: { rejectUnauthorized: false },
+        tls: { rejectUnauthorized: this.rejectUnauthorized },
       });
     } catch (err) {
       // Network-level failure (DNS, connection refused, TLS)
@@ -184,6 +194,9 @@ class PIRemoteClient {
 
   /** Follow an absolute Links.Point URL to get the PI Point object. */
   async getPointFromUrl(pointUrl: string): Promise<RemotePIPoint> {
+    // SSRF protection: ensure the URL points to the same server we connected to
+    validateUrlMatchesHost(pointUrl, this.serverUrl);
+
     let res: Response;
     try {
       res = await fetch(pointUrl, {
@@ -192,7 +205,7 @@ class PIRemoteClient {
           'X-Requested-With': 'XMLHttpRequest',
         },
         // @ts-expect-error — Bun supports rejectUnauthorized on fetch
-        tls: { rejectUnauthorized: false },
+        tls: { rejectUnauthorized: this.rejectUnauthorized },
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -587,7 +600,7 @@ export function createImportHandler(
 
     // POST /admin/import/test-connection
     if (path === '/admin/import/test-connection') {
-      readBody(req, async (raw) => {
+      readBody(req, res, async (raw) => {
         try {
           const body = JSON.parse(raw);
           const conn = parseConnection(body);
@@ -605,7 +618,7 @@ export function createImportHandler(
         } catch (err) {
           sendJson(res, 200, {
             connected: false,
-            error: err instanceof Error ? err.message : String(err),
+            error: sanitizeErrorMessage(err, 'Connection failed'),
           });
         }
       });
@@ -614,7 +627,7 @@ export function createImportHandler(
 
     // POST /admin/import/browse/servers
     if (path === '/admin/import/browse/servers') {
-      readBody(req, async (raw) => {
+      readBody(req, res, async (raw) => {
         try {
           const body = JSON.parse(raw);
           const conn = parseConnection(body);
@@ -627,7 +640,7 @@ export function createImportHandler(
           sendJson(res, 200, { servers });
         } catch (err) {
           const status = err instanceof PIRemoteError ? err.statusCode : 500;
-          sendJson(res, status, { error: err instanceof Error ? err.message : String(err) });
+          sendJson(res, status, { error: sanitizeErrorMessage(err) });
         }
       });
       return true;
@@ -635,7 +648,7 @@ export function createImportHandler(
 
     // POST /admin/import/browse/databases
     if (path === '/admin/import/browse/databases') {
-      readBody(req, async (raw) => {
+      readBody(req, res, async (raw) => {
         try {
           const body = JSON.parse(raw);
           const conn = parseConnection(body);
@@ -653,7 +666,7 @@ export function createImportHandler(
           sendJson(res, 200, { databases });
         } catch (err) {
           const status = err instanceof PIRemoteError ? err.statusCode : 500;
-          sendJson(res, status, { error: err instanceof Error ? err.message : String(err) });
+          sendJson(res, status, { error: sanitizeErrorMessage(err) });
         }
       });
       return true;
@@ -661,7 +674,7 @@ export function createImportHandler(
 
     // POST /admin/import/browse/elements
     if (path === '/admin/import/browse/elements') {
-      readBody(req, async (raw) => {
+      readBody(req, res, async (raw) => {
         try {
           const body = JSON.parse(raw);
           const conn = parseConnection(body);
@@ -682,7 +695,7 @@ export function createImportHandler(
           sendJson(res, 200, { elements });
         } catch (err) {
           const status = err instanceof PIRemoteError ? err.statusCode : 500;
-          sendJson(res, status, { error: err instanceof Error ? err.message : String(err) });
+          sendJson(res, status, { error: sanitizeErrorMessage(err) });
         }
       });
       return true;
@@ -694,7 +707,7 @@ export function createImportHandler(
         sendJson(res, 409, { error: 'An import is already in progress' });
         return true;
       }
-      readBody(req, async (raw) => {
+      readBody(req, res, async (raw) => {
         try {
           const body = JSON.parse(raw) as ImportRequest;
           const conn = parseConnection(body.connection);
@@ -799,12 +812,11 @@ export function createImportHandler(
           sendEvent(res, { type: 'result', ...result });
           res.end();
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.error(`[AF Import] Fatal error: ${msg}`);
+          console.error('[AF Import] Fatal error:', err);
           // If headers haven't been sent yet, send JSON error
           if (!res.headersSent) {
             const status = err instanceof PIRemoteError ? err.statusCode : 500;
-            sendJson(res, status, { error: msg });
+            sendJson(res, status, { error: sanitizeErrorMessage(err, 'Import failed') });
           } else {
             // Stream already started — send error event and close
             sendEvent(res, { type: 'error', error: msg });

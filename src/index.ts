@@ -13,7 +13,7 @@ async function main() {
   console.log('===============================================\n');
 
   // -- Initialize components --
-  const piRest = new PIRestClient(PI_CONFIG.server, PI_CONFIG.username, PI_CONFIG.password);
+  const piRest = new PIRestClient(PI_CONFIG.server, PI_CONFIG.username, PI_CONFIG.password, PI_CONFIG.rejectUnauthorized);
   const sensorState = new SensorStateManager(300);
   const alertManager = new AlertManager();
 
@@ -67,6 +67,7 @@ async function main() {
     password: PI_CONFIG.password,
     includeInitialValues: true,
     heartbeatRate: 5,
+    rejectUnauthorized: PI_CONFIG.rejectUnauthorized,
   });
 
   // -- Wire: PI channel -> sensor state --

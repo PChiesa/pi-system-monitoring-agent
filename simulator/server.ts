@@ -17,6 +17,19 @@ import { AFModel } from './af-model.js';
 import { createAFHandler } from './af-handler.js';
 import { createImportHandler } from './import-handler.js';
 import { sendJson, readBody } from './utils.js';
+import {
+  createTagSchema,
+  updateTagProfileSchema,
+  setOverrideSchema,
+  createAFDatabaseSchema,
+  createAFElementSchema,
+  createAFAttributeSchema,
+  updateAFElementSchema,
+  updateAFAttributeSchema,
+  customScenarioSchema,
+  activateScenarioSchema,
+  formatZodError,
+} from './validation.js';
 import { initDatabase, waitForDatabase, closeDatabase, hasDb } from './db/connection.js';
 import { loadAllTags, insertTag, updateTagProfile as dbUpdateTagProfile, updateTagGroup as dbUpdateTagGroup, deleteTag as dbDeleteTag, rowToProfile } from './db/tag-repository.js';
 import { loadAllDatabases, loadAllElements, loadAllAttributes, insertDatabase as dbInsertDatabase, insertElement as dbInsertElement, insertAttribute as dbInsertAttribute, updateElement as dbUpdateElement, updateAttribute as dbUpdateAttribute, deleteElement as dbDeleteElement, deleteAttribute as dbDeleteAttribute } from './db/af-repository.js';
@@ -44,9 +57,11 @@ export class SimulatorServer {
   private startTime = Date.now();
   private customScenarios = new Map<string, CustomScenarioDefinition>();
   private customTagGroups = new Map<string, string>();
+  private corsAllowedOrigins: string[];
 
   constructor(config: SimulatorConfig) {
     this.config = config;
+    this.corsAllowedOrigins = buildCorsAllowlist(config.port);
     this.registry = new TagRegistry();
     this.generator = new DataGenerator(this.registry);
     this.scenarioEngine = new ScenarioEngine(this.generator, config.mode);
@@ -177,8 +192,11 @@ export class SimulatorServer {
   }
 
   private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
-    // CORS headers for dev (Vite dev server on a different port)
-    if (req.headers.origin) {
+    // Security headers
+    setSecurityHeaders(res);
+
+    // CORS — only allow configured origins (not arbitrary reflection)
+    if (req.headers.origin && this.corsAllowedOrigins.includes(req.headers.origin)) {
       res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -211,12 +229,22 @@ export class SimulatorServer {
     }
 
     if ((url.pathname === '/docs' || url.pathname === '/docs/') && req.method === 'GET') {
+      // Docs page uses inline scripts and an external CDN script — relax CSP for this page
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'"
+      );
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(getExplorerHtml(this.config.port));
       return;
     }
 
     if ((url.pathname === '/ws-test' || url.pathname === '/ws-test/') && req.method === 'GET') {
+      // WS test page uses inline scripts and onclick handlers — relax CSP for this page
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss:"
+      );
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(getWsTestHtml(this.config.port, this.registry.getAllMeta(), this.getAFElements()));
       return;
@@ -280,10 +308,11 @@ export class SimulatorServer {
     }
 
     if (url.pathname === '/admin/af/databases' && req.method === 'POST') {
-      readBody(req, async (body) => {
+      readBody(req, res, async (body) => {
         try {
-          const { name, description } = JSON.parse(body);
-          if (!name) { sendJson(res, 400, { error: 'Missing "name"' }); return; }
+          const parsed = createAFDatabaseSchema.safeParse(JSON.parse(body));
+          if (!parsed.success) { sendJson(res, 400, { error: formatZodError(parsed.error) }); return; }
+          const { name, description } = parsed.data;
           const db = this.afModel.createDatabase(name, description ?? '');
           if (hasDb()) {
             try {
@@ -298,13 +327,14 @@ export class SimulatorServer {
     }
 
     if (url.pathname === '/admin/af/elements' && req.method === 'POST') {
-      readBody(req, async (body) => {
+      readBody(req, res, async (body) => {
         try {
-          const { parentWebId, name, description } = JSON.parse(body);
-          if (!parentWebId || !name) {
-            sendJson(res, 400, { error: 'Missing "parentWebId" or "name"' });
+          const parsed = createAFElementSchema.safeParse(JSON.parse(body));
+          if (!parsed.success) {
+            sendJson(res, 400, { error: formatZodError(parsed.error) });
             return;
           }
+          const { parentWebId, name, description } = parsed.data;
           const el = this.afModel.createElement(parentWebId, name, description ?? '');
           if (!el) { sendJson(res, 404, { error: 'Parent not found' }); return; }
           if (hasDb()) {
@@ -336,9 +366,11 @@ export class SimulatorServer {
     if (afElementMatch) {
       const webId = decodeURIComponent(afElementMatch[1]!);
       if (req.method === 'PUT') {
-        readBody(req, async (body) => {
+        readBody(req, res, async (body) => {
           try {
-            const updates = JSON.parse(body);
+            const parsed = updateAFElementSchema.safeParse(JSON.parse(body));
+            if (!parsed.success) { sendJson(res, 400, { error: formatZodError(parsed.error) }); return; }
+            const updates = parsed.data;
             const ok = this.afModel.updateElement(webId, updates);
             if (!ok) { sendJson(res, 404, { error: 'Element not found' }); return; }
             if (hasDb()) {
@@ -367,13 +399,14 @@ export class SimulatorServer {
     }
 
     if (url.pathname === '/admin/af/attributes' && req.method === 'POST') {
-      readBody(req, async (body) => {
+      readBody(req, res, async (body) => {
         try {
-          const { elementWebId, name, type, defaultUOM, piPointName, description } = JSON.parse(body);
-          if (!elementWebId || !name) {
-            sendJson(res, 400, { error: 'Missing "elementWebId" or "name"' });
+          const parsed = createAFAttributeSchema.safeParse(JSON.parse(body));
+          if (!parsed.success) {
+            sendJson(res, 400, { error: formatZodError(parsed.error) });
             return;
           }
+          const { elementWebId, name, type, defaultUOM, piPointName, description } = parsed.data;
           const attr = this.afModel.createAttribute(
             elementWebId, name, type ?? 'Double', defaultUOM ?? '', piPointName ?? null, description ?? ''
           );
@@ -399,9 +432,11 @@ export class SimulatorServer {
     if (afAttributeMatch) {
       const webId = decodeURIComponent(afAttributeMatch[1]!);
       if (req.method === 'PUT') {
-        readBody(req, async (body) => {
+        readBody(req, res, async (body) => {
           try {
-            const updates = JSON.parse(body);
+            const parsed = updateAFAttributeSchema.safeParse(JSON.parse(body));
+            if (!parsed.success) { sendJson(res, 400, { error: formatZodError(parsed.error) }); return; }
+            const updates = parsed.data;
             const ok = this.afModel.updateAttribute(webId, updates);
             if (!ok) { sendJson(res, 404, { error: 'Attribute not found' }); return; }
             if (hasDb()) {
@@ -488,9 +523,9 @@ export class SimulatorServer {
     const uiDistDir = path.join(import.meta.dir, 'ui', 'dist');
     let filePath = pathname.replace(/^\/ui\/?/, '') || 'index.html';
 
-    const fullPath = path.join(uiDistDir, filePath);
+    const fullPath = path.resolve(uiDistDir, filePath);
 
-    // Prevent path traversal
+    // Prevent path traversal (resolve normalizes '..' segments before the check)
     if (!fullPath.startsWith(uiDistDir)) {
       sendJson(res, 403, { Message: 'Forbidden' });
       return;
@@ -545,13 +580,14 @@ export class SimulatorServer {
   }
 
   private handleAdminSetScenario(req: http.IncomingMessage, res: http.ServerResponse): void {
-    readBody(req, (body) => {
+    readBody(req, res, (body) => {
       try {
-        const { name } = JSON.parse(body);
-        if (!name) {
-          sendJson(res, 400, { error: 'Missing "name" in request body' });
+        const parsed = activateScenarioSchema.safeParse(JSON.parse(body));
+        if (!parsed.success) {
+          sendJson(res, 400, { error: formatZodError(parsed.error) });
           return;
         }
+        const { name } = parsed.data;
         const ok = this.scenarioEngine.activate(name);
         if (!ok) {
           sendJson(res, 404, {
@@ -587,9 +623,14 @@ export class SimulatorServer {
     res: http.ServerResponse,
     tagName: string
   ): void {
-    readBody(req, async (body) => {
+    readBody(req, res, async (body) => {
       try {
-        const updates = JSON.parse(body);
+        const parsed = updateTagProfileSchema.safeParse(JSON.parse(body));
+        if (!parsed.success) {
+          sendJson(res, 400, { error: formatZodError(parsed.error) });
+          return;
+        }
+        const updates = parsed.data;
         const ok = this.generator.updateProfile(tagName, updates);
         if (!ok) {
           sendJson(res, 404, { error: `Unknown tag "${tagName}"` });
@@ -611,13 +652,14 @@ export class SimulatorServer {
     res: http.ServerResponse,
     tagName: string
   ): void {
-    readBody(req, (body) => {
+    readBody(req, res, (body) => {
       try {
-        const { value } = JSON.parse(body);
-        if (value === undefined || value === null) {
-          sendJson(res, 400, { error: 'Missing "value" in request body' });
+        const parsed = setOverrideSchema.safeParse(JSON.parse(body));
+        if (!parsed.success) {
+          sendJson(res, 400, { error: formatZodError(parsed.error) });
           return;
         }
+        const { value } = parsed.data;
         const ok = this.generator.setOverride(tagName, value);
         if (!ok) {
           sendJson(res, 404, { error: `Unknown tag "${tagName}"` });
@@ -654,13 +696,14 @@ export class SimulatorServer {
   }
 
   private handleAdminCreateTag(req: http.IncomingMessage, res: http.ServerResponse): void {
-    readBody(req, async (body) => {
+    readBody(req, res, async (body) => {
       try {
-        const { tagName, unit, group, profile } = JSON.parse(body);
-        if (!tagName || !profile) {
-          sendJson(res, 400, { error: 'Missing required fields: tagName, profile' });
+        const parsed = createTagSchema.safeParse(JSON.parse(body));
+        if (!parsed.success) {
+          sendJson(res, 400, { error: formatZodError(parsed.error) });
           return;
         }
+        const { tagName, unit, group, profile } = parsed.data;
         if (this.registry.getByTagName(tagName)) {
           sendJson(res, 409, { error: `Tag "${tagName}" already exists` });
           return;
@@ -692,13 +735,14 @@ export class SimulatorServer {
   }
 
   private handleCreateCustomScenario(req: http.IncomingMessage, res: http.ServerResponse): void {
-    readBody(req, async (body) => {
+    readBody(req, res, async (body) => {
       try {
-        const def = JSON.parse(body) as CustomScenarioDefinition;
-        if (!def.name || !def.durationMs || !Array.isArray(def.modifiers)) {
-          sendJson(res, 400, { error: 'Missing required fields: name, durationMs, modifiers[]' });
+        const parsed = customScenarioSchema.safeParse(JSON.parse(body));
+        if (!parsed.success) {
+          sendJson(res, 400, { error: formatZodError(parsed.error) });
           return;
         }
+        const def = parsed.data as CustomScenarioDefinition;
         this.customScenarios.set(def.name, def);
         this.scenarioEngine.register(createCustomScenario(def));
         if (hasDb()) {
@@ -717,13 +761,18 @@ export class SimulatorServer {
     res: http.ServerResponse,
     name: string
   ): void {
-    readBody(req, async (body) => {
+    readBody(req, res, async (body) => {
       try {
         if (!this.customScenarios.has(name)) {
           sendJson(res, 404, { error: `Custom scenario "${name}" not found` });
           return;
         }
-        const def = JSON.parse(body) as CustomScenarioDefinition;
+        const parsed = customScenarioSchema.safeParse(JSON.parse(body));
+        if (!parsed.success) {
+          sendJson(res, 400, { error: formatZodError(parsed.error) });
+          return;
+        }
+        const def = parsed.data as CustomScenarioDefinition;
         def.name = name; // Enforce URL name
         this.customScenarios.set(name, def);
         this.scenarioEngine.unregister(name);
@@ -777,4 +826,29 @@ function getTagGroup(tagName: string): string {
   if (tagName.startsWith('BOP.CTRL.')) return 'Control';
   if (tagName.startsWith('WELL.')) return 'Wellbore';
   return 'Other';
+}
+
+function setSecurityHeaders(res: http.ServerResponse): void {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+  );
+}
+
+function buildCorsAllowlist(port: number): string[] {
+  const envOrigins = process.env.SIM_CORS_ORIGINS;
+  if (envOrigins) {
+    return envOrigins.split(',').map((o) => o.trim()).filter(Boolean);
+  }
+  // Default: simulator itself + common Vite dev server ports
+  return [
+    `https://localhost:${port}`,
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:3000',
+  ];
 }

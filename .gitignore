@@ -1,4 +1,17 @@
 node_modules/
 dist/
-.env
 *.js.map
+.claude/
+
+# Environment files (may contain credentials)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db

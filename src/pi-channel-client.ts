@@ -76,7 +76,7 @@ export class PIChannelClient extends EventEmitter {
 
     this.ws = new WebSocket(this.url, {
       headers: { Authorization: this.authHeader },
-      rejectUnauthorized: this.config.rejectUnauthorized ?? false,
+      rejectUnauthorized: this.config.rejectUnauthorized ?? true,
     });
 
     this.ws.on('open', () => {
